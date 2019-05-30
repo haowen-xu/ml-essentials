@@ -1,0 +1,4 @@
+-r requirements.txt
+
+PyTest >= 3.8.0
+coverage >= 4.5.3
