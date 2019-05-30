@@ -638,11 +638,11 @@ class ConfigLoader(Generic[TConfig]):
         >>> loader.load_object({'nested1.a': 1230, 'nested1': 'literal'})
         Traceback (most recent call last):
             ...
-        ValueError: at .nested1: cannot merge a non-object attribute with an object attribute
+        ValueError: at .nested1: cannot merge a non-object attribute into an object attribute
         >>> loader.load_object({'nested1': 'literal', 'nested1.a': 1230})
         Traceback (most recent call last):
             ...
-        ValueError: at .nested1.a: cannot merge a non-object attribute with an object attribute
+        ValueError: at .nested1.a: cannot merge an object attribute into a non-object attribute
 
         Args:
             key_values: The dict or config object.
@@ -651,10 +651,14 @@ class ConfigLoader(Generic[TConfig]):
             raise TypeError(f'`key_values` must be a dict or a Config object: '
                             f'got {key_values!r}')
 
-        def copy_values(src, dst):
+        def copy_values(src, dst, prefix):
             for key in src:
-                err_msg = (f'at .{key}: cannot merge a non-object '
-                           f'attribute with an object attribute')
+                err_msg1 = lambda: (
+                    f'at {prefix + key}: cannot merge a non-object '
+                    f'attribute into an object attribute')
+                err_msg2 = lambda: (
+                    f'at {prefix + key}: cannot merge an object '
+                    f'attribute into a non-object attribute')
 
                 # find the target node in dst
                 parts = key.split('.')
@@ -663,7 +667,7 @@ class ConfigLoader(Generic[TConfig]):
                     if part not in tmp:
                         tmp[part] = Config()
                     elif not isinstance(tmp[part], Config):
-                        raise ValueError(err_msg)
+                        raise ValueError(err_msg2())
                     tmp = tmp[part]
 
                 # get the src and dst values
@@ -677,14 +681,16 @@ class ConfigLoader(Generic[TConfig]):
                 # now copy the values to the target node
                 if isinstance(src_val, (dict, Config)):
                     if dst_val is NOT_SET:
-                        new_val = copy_values(src_val, Config())
+                        new_val = copy_values(
+                            src_val, Config(), prefix=prefix + key + '.')
                     elif isinstance(dst_val, Config):
-                        new_val = copy_values(src_val, dst_val)
-                    else:  # pragma: no cover
-                        raise AssertionError('this branch should not touch')
+                        new_val = copy_values(
+                            src_val, dst_val, prefix=prefix + key + '.')
+                    else:
+                        raise ValueError(err_msg2())
                 else:
                     if isinstance(dst_val, Config):
-                        raise ValueError(err_msg)
+                        raise ValueError(err_msg1())
                     else:
                         new_val = src_val
 
@@ -692,7 +698,7 @@ class ConfigLoader(Generic[TConfig]):
 
             return dst
 
-        self._config.update(copy_values(key_values, Config()))
+        self._config.update(copy_values(key_values, Config(), prefix='.'))
 
     def load_json(self, path: Union[str, bytes, PathLike], cls=None) -> TConfig:
         """

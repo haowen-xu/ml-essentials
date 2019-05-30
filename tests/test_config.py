@@ -1,4 +1,7 @@
+import codecs
+import os
 import unittest
+from tempfile import TemporaryDirectory
 
 import pytest
 
@@ -6,7 +9,7 @@ from ml_essentials.config import (is_config_attribute, Config,
                                   ConfigField, BoolValidator, ValidationContext,
                                   ConfigValidator, StrValidator, FloatValidator,
                                   IntValidator, ConfigValidationError,
-                                  get_validator)
+                                  get_validator, ConfigLoader)
 
 
 class ConfigTestCase(unittest.TestCase):
@@ -109,8 +112,85 @@ class ConfigTestCase(unittest.TestCase):
                            match='`name` must not contain \'.\': \'a.b\''):
             setattr(config, 'a.b', 123)
 
-    def test_Config_validate(self):
-        pass
+
+class ConfigLoaderTestCase(unittest.TestCase):
+
+    def test_construction(self):
+        class MyConfig(Config):
+            pass
+
+        loader = ConfigLoader(config_cls=MyConfig)
+        self.assertIs(loader.config_cls, MyConfig)
+        self.assertFalse(loader.validate_all)
+
+        loader = ConfigLoader(config_cls=MyConfig, validate_all=True)
+        self.assertTrue(loader.validate_all)
+
+        with pytest.raises(TypeError,
+                           match='`config_cls` is not Config or a subclass of '
+                                 'Config: <class \'str\'>'):
+            _ = ConfigLoader(str)
+
+    def test_load_object(self):
+        class MyConfig(Config):
+            class nested1(Config):
+                a = 123
+                b = ConfigField(float, default=None)
+
+            class nested2(Config):
+                c = 789
+
+
+        # test feed object of invalid type
+        loader = ConfigLoader(MyConfig)
+        with pytest.raises(TypeError,
+                           match='`key_values` must be a dict or a Config '
+                                 'object: got \\[1, 2, 3\\]'):
+            loader.load_object([1, 2, 3])
+
+        # test load object
+        loader.load_object({
+            'nested1': Config(a=1230),
+            'nested1.b': 456,
+            'nested2.c': '7890',
+            'nested2': {'d': 'hello'}
+        })
+        cls_name = 'ConfigLoaderTestCase.test_load_object.<locals>.MyConfig'
+        self.assertEqual(
+            repr(loader.get()),
+            f'{cls_name}('
+            f'nested1={cls_name}.nested1(a=1230, b=456.0), '
+            f'nested2={cls_name}.nested2(c=7890, d=\'hello\'))'
+        )
+
+        # test load object error
+        with pytest.raises(ValueError,
+                           match='at .nested1.a: cannot merge an object '
+                                 'attribute into a non-object attribute'):
+            loader.load_object({'nested1.a': 123,
+                                'nested1': {'a': Config(value=456)}})
+
+    def test_load_json(self):
+        with TemporaryDirectory() as temp_dir:
+            json_file = os.path.join(temp_dir, 'test.json')
+            with codecs.open(json_file, 'wb', 'utf-8') as f:
+                f.write('{"a": 1, "nested.b": 2}\n')
+
+            loader = ConfigLoader(Config)
+            loader.load_json(json_file)
+            self.assertEqual(
+                repr(loader.get()), 'Config(a=1, nested=Config(b=2))')
+
+    def test_load_yaml(self):
+        with TemporaryDirectory() as temp_dir:
+            yaml_file = os.path.join(temp_dir, 'test.yaml')
+            with codecs.open(yaml_file, 'wb', 'utf-8') as f:
+                f.write('a: 1\nnested.b: 2\n')
+
+            loader = ConfigLoader(Config)
+            loader.load_yaml(yaml_file)
+            self.assertEqual(
+                repr(loader.get()), 'Config(a=1, nested=Config(b=2))')
 
 
 class ValidatorTestCase(unittest.TestCase):
