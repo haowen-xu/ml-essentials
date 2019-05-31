@@ -2,6 +2,7 @@ import codecs
 import copy
 import inspect
 import json
+import os
 from argparse import Action, ArgumentParser
 from collections import OrderedDict, namedtuple
 from contextlib import contextmanager
@@ -261,6 +262,20 @@ class Config(object):
             f'{key}={getattr(self, key)!r}' for key in self
         ]
         return f'{self.__class__.__qualname__}({", ".join(attributes)})'
+
+    def __eq__(self, other):
+        if not isinstance(other, self.__class__):
+            return False
+        keys = sorted(self)
+        if keys != sorted(other):
+            return False
+        for key in keys:
+            if self[key] != other[key]:
+                return False
+        return True
+
+    def __hash__(self):
+        return hash([(key, self[key]) for key in sorted(self)])
 
     def __getattribute__(self, name):
         val = object.__getattribute__(self, name)
@@ -688,6 +703,8 @@ class ConfigLoader(Generic[TConfig]):
                             src_val, dst_val, prefix=prefix + key + '.')
                     else:
                         raise ValueError(err_msg2())
+                elif isinstance(src_val, StrictDict):
+                    new_val = src_val.value
                 else:
                     if isinstance(dst_val, Config):
                         raise ValueError(err_msg1())
@@ -731,29 +748,47 @@ class ConfigLoader(Generic[TConfig]):
             obj = yaml.load(f, Loader=Loader)
             return self.load_object(obj)
 
-    def parse_args(self, args: Iterable[str]):
+    def load_file(self, path: Union[str, bytes, PathLike]) -> TConfig:
         """
-        Parse config attributes from CLI argument.
+        Load config from a file.
 
-        >>> class YourConfig(Config):
-        ...     a = 123
-        ...     b = ConfigField(float)
-        ...
-        ...     class nested(Config):
-        ...         c = 789
+        The file will be loaded according to its extension.  Supported
+        extensions are::
 
-        >>> loader = ConfigLoader(YourConfig)
-        >>> loader.parse_args([
-        ...     '--a=1230',
-        ...     '--b=456',
-        ...     '--nested.c=7890'
-        ... ])
-        >>> loader.get()
-        YourConfig(a=1230, b=456.0, nested=YourConfig.nested(c=7890))
+            *.yml, *.yaml, *.json
 
         Args:
-            args: The CLI arguments.
+            path: Path of the file.
+
+        Returns:
+            The loaded config object.
         """
+        name, ext = os.path.splitext(path)
+        ext = ext.lower()
+        if ext in ('.yml', '.yaml'):
+            return self.load_yaml(path)
+        elif ext in ('.json',):
+            return self.load_json(path)
+        else:
+            raise IOError(f'Unsupported config file extension: {ext}')
+
+    def build_arg_parser(self, parser: Optional[ArgumentParser] = None) \
+            -> ArgumentParser:
+        """
+        Build an argument parser.
+
+        This method is a sub-procedure of :class:`parse_args()`.
+        Un-specified options will be :obj:`NOT_SET` in the namespace
+        returned by the parser.
+
+        Args:
+            parser: The parser to populate the arguments.
+                If not specified, will create a new parser.
+
+        Returns:
+            The argument parser.
+        """
+
         class _ConfigAction(Action):
 
             def __init__(self, validator: Validator, option_strings, dest,
@@ -762,9 +797,12 @@ class ConfigLoader(Generic[TConfig]):
                                                     **kwargs)
                 self._validator = validator
 
-            def __call__(self, parser, namespace, values, option_string=None):
+            def __call__(self, parser, namespace, values,
+                         option_string=None):
                 try:
-                    if self._validator is None:
+                    if self._validator is None or (
+                            isinstance(self._validator, FieldValidator) and
+                            self._validator.sub_validator is None):
                         try:
                             value = yaml.load(values)
                         except yaml.YAMLError:
@@ -772,7 +810,8 @@ class ConfigLoader(Generic[TConfig]):
                     else:
                         context = ValidationContext()
                         with context.enter(f'.{self.dest}'):
-                            value = self._validator.validate(values, context)
+                            value = self._validator.validate(values,
+                                                             context)
 
                 except Exception as ex:
                     message = f'Invalid value for argument `{option_string}`'
@@ -782,7 +821,9 @@ class ConfigLoader(Generic[TConfig]):
                         message += '.'
                     raise ValueError(message)
                 else:
-                    target[self.dest] = value
+                    if isinstance(value, dict):
+                        value = StrictDict(value)
+                    setattr(namespace, self.dest, value)
 
         # gather the nested config fields
         def get_field_help(field):
@@ -796,6 +837,7 @@ class ConfigLoader(Generic[TConfig]):
             if field.choices:
                 config_help += f'; choices {sorted(field.choices)}'
             config_help += ')'
+            return config_help
 
         def gather_args(cls, prefix):
             if prefix:
@@ -808,27 +850,70 @@ class ConfigLoader(Generic[TConfig]):
 
                     if isinstance(validator, ConfigValidator):
                         gather_args(validator.config_cls, prefix + key)
+                    elif isinstance(validator, FieldValidator) and \
+                            isinstance(validator.sub_validator,
+                                       ConfigValidator):
+                        gather_args(validator.sub_validator.config_cls,
+                                    prefix + key)
                     else:
                         option_string = f'--{prefix}{key}'
 
                         if isinstance(val, ConfigField):
-                            help = get_field_help(val)
+                            help_msg = get_field_help(val)
                         else:
-                            help = None
+                            help_msg = f'(default {val})'
 
                         parser.add_argument(
-                            option_string, help=help,
-                            action=_ConfigAction, validator=validator
+                            option_string, help=help_msg,
+                            action=_ConfigAction, validator=validator,
+                            default=NOT_SET
                         )
 
         # populate the arguments
-        parser = ArgumentParser()
+        if parser is None:
+            parser = ArgumentParser()
         gather_args(self.config_cls, '')
 
-        # parse the arguments
-        target = {}
-        parser.parse_args(list(args))
-        self.load_object(target)
+        return parser
+
+    def parse_args(self, args: Iterable[str]):
+        """
+        Parse config attributes from CLI argument.
+
+        >>> class YourConfig(Config):
+        ...     a = 123
+        ...     b = ConfigField(float, description="a float number")
+        ...
+        ...     class nested(Config):
+        ...         c = ConfigField(str, choices=['hello', 'bye'])
+
+        >>> loader = ConfigLoader(YourConfig)
+        >>> loader.parse_args([
+        ...     '--a=1230',
+        ...     '--b=456',
+        ...     '--nested.c=hello'
+        ... ])
+        >>> loader.get()
+        YourConfig(a=1230, b=456.0, nested=YourConfig.nested(c='hello'))
+
+        Args:
+            args: The CLI arguments.
+        """
+        parser = self.build_arg_parser()
+        namespace = parser.parse_args(list(args))
+        parsed = {key: value for key, value in vars(namespace).items()
+                  if value is not NOT_SET}
+        self.load_object(parsed)
+
+
+class StrictDict(object):
+    """
+    Class to wrap a dict, such that :meth:`ConfigLoader.load_object()`
+    will not interpret it as a nested config object.
+    """
+
+    def __init__(self, value):
+        self.value = value
 
 
 def is_config_attribute(cls_or_obj: Union[Type['Config'], 'Config'],
@@ -1024,12 +1109,14 @@ class FieldValidator(Validator):
         if value is not None and self.sub_validator is not None:
             value = self.sub_validator.validate(value, context)
 
-        if value is None and not self.field.nullable:
-            context.add_error('null value is not allowed')
+        if value is None:
+            if not self.field.nullable:
+                context.add_error('null value is not allowed')
 
-        elif self.field.choices and value not in self.field.choices:
-            context.add_error(f'value is not one of: '
-                              f'{list(self.field.choices)}')
+        else:
+            if self.field.choices and value not in self.field.choices:
+                context.add_error(f'value is not one of: '
+                                  f'{list(self.field.choices)}')
 
         return value
 

@@ -1,5 +1,6 @@
 import codecs
 import os
+import shutil
 import unittest
 from tempfile import TemporaryDirectory
 
@@ -9,7 +10,7 @@ from ml_essentials.config import (is_config_attribute, Config,
                                   ConfigField, BoolValidator, ValidationContext,
                                   ConfigValidator, StrValidator, FloatValidator,
                                   IntValidator, ConfigValidationError,
-                                  get_validator, ConfigLoader)
+                                  get_validator, ConfigLoader, FieldValidator)
 
 
 class ConfigTestCase(unittest.TestCase):
@@ -140,7 +141,6 @@ class ConfigLoaderTestCase(unittest.TestCase):
             class nested2(Config):
                 c = 789
 
-
         # test feed object of invalid type
         loader = ConfigLoader(MyConfig)
         with pytest.raises(TypeError,
@@ -155,12 +155,10 @@ class ConfigLoaderTestCase(unittest.TestCase):
             'nested2.c': '7890',
             'nested2': {'d': 'hello'}
         })
-        cls_name = 'ConfigLoaderTestCase.test_load_object.<locals>.MyConfig'
         self.assertEqual(
-            repr(loader.get()),
-            f'{cls_name}('
-            f'nested1={cls_name}.nested1(a=1230, b=456.0), '
-            f'nested2={cls_name}.nested2(c=7890, d=\'hello\'))'
+            loader.get(),
+            MyConfig(nested1=MyConfig.nested1(a=1230, b=456.0),
+                     nested2=MyConfig.nested2(c=7890, d='hello'))
         )
 
         # test load object error
@@ -170,27 +168,178 @@ class ConfigLoaderTestCase(unittest.TestCase):
             loader.load_object({'nested1.a': 123,
                                 'nested1': {'a': Config(value=456)}})
 
-    def test_load_json(self):
+    def test_load_object_nested(self):
+        class Nested2(Config):
+            b = 456
+
+        class Nested3(Config):
+            c = 789
+
+        class MyConfig(Config):
+            class nested1(Config):
+                a = 123
+
+            nested2 = ConfigField(Nested2)
+            nested3 = Nested3()
+
+        loader = ConfigLoader(MyConfig)
+        loader.load_object({
+            'nested1': Config(a=1230),
+            'nested2.b': 4560,
+            'nested3.c': 7890,
+            'nested3': {'d': 'hello'}
+        })
+        self.assertEqual(
+            loader.get(),
+            MyConfig(nested1=MyConfig.nested1(a=1230),
+                     nested2=Nested2(b=4560.0),
+                     nested3=Nested3(c=7890, d='hello'))
+        )
+
+    def test_load_file(self):
         with TemporaryDirectory() as temp_dir:
             json_file = os.path.join(temp_dir, 'test.json')
             with codecs.open(json_file, 'wb', 'utf-8') as f:
                 f.write('{"a": 1, "nested.b": 2}\n')
 
-            loader = ConfigLoader(Config)
-            loader.load_json(json_file)
-            self.assertEqual(
-                repr(loader.get()), 'Config(a=1, nested=Config(b=2))')
-
-    def test_load_yaml(self):
-        with TemporaryDirectory() as temp_dir:
             yaml_file = os.path.join(temp_dir, 'test.yaml')
             with codecs.open(yaml_file, 'wb', 'utf-8') as f:
                 f.write('a: 1\nnested.b: 2\n')
 
+            expected = Config(a=1, nested=Config(b=2))
             loader = ConfigLoader(Config)
+
+            # test load_json
+            loader.load_json(json_file)
+            self.assertEqual(loader.get(), expected)
+
+            # test load_yaml
             loader.load_yaml(yaml_file)
-            self.assertEqual(
-                repr(loader.get()), 'Config(a=1, nested=Config(b=2))')
+            self.assertEqual(loader.get(), expected)
+
+            # test load_file
+            loader.load_file(json_file)
+            self.assertEqual(loader.get(), expected)
+            loader.load_file(yaml_file)
+            self.assertEqual(loader.get(), expected)
+
+            yaml_file2 = os.path.join(temp_dir, 'test.YML')
+            shutil.copy(yaml_file, yaml_file2)
+            loader.load_file(yaml_file2)
+            self.assertEqual(loader.get(), expected)
+
+            # test unsupported extension
+            txt_file = os.path.join(temp_dir, 'test.txt')
+            with codecs.open(txt_file, 'wb', 'utf-8') as f:
+                f.write('')
+
+            with pytest.raises(IOError,
+                               match='Unsupported config file extension: .txt'):
+                _ = loader.load_file(txt_file)
+
+    def test_parse_args(self):
+        class MyConfig(Config):
+            a = 123
+            b = ConfigField(float, default=None)
+
+            class nested(Config):
+                c = ConfigField(str, default=None, choices=['hello', 'bye'])
+                d = ConfigField(description='anything, but required')
+
+            e = None
+
+        # test help message
+        loader = ConfigLoader(MyConfig)
+        parser = loader.build_arg_parser()
+        self.assertRegex(
+            parser.format_help(),
+            r"[^@]*"
+            r"--a\s+A\s+\(default 123\)\s+"
+            r"--b\s+B\s+\(default None\)\s+"
+            r"--e\s+E\s+\(default None\)\s+"
+            r"--nested\.c\s+NESTED\.C\s+\(default None; choices \['bye', 'hello'\]\)\s+"
+            r"--nested\.d\s+NESTED\.D\s+anything, but required\s+\(required\)\s+"
+        )
+
+        # test parse
+        loader = ConfigLoader(MyConfig)
+        loader.parse_args([
+            '--nested.c=hello',
+            '--nested.d=[1,2,3]',
+            '--e={"key":"value"}'  # wrapped by strict dict
+        ])
+        self.assertEqual(
+            loader.get(),
+            MyConfig(a=123, b=None, e={'key': 'value'},
+                     nested=MyConfig.nested(c='hello', d=[1, 2, 3]))
+        )
+
+        # test parse yaml failure, and fallback to str
+        loader = ConfigLoader(MyConfig)
+        loader.parse_args([
+            '--nested.d=[1,2,3',  # not a valid yaml, fallback to str
+            '--e={"key":"value"'  # not a valid yaml, fallback to str
+        ])
+        self.assertEqual(
+            loader.get(),
+            MyConfig(a=123, b=None, e='{"key":"value"',
+                     nested=MyConfig.nested(c=None, d='[1,2,3'))
+        )
+
+        # test parse error
+        with pytest.raises(ValueError,
+                           match=r"at \.nested\.c: value is not one of: "
+                                 r"\['hello', 'bye'\]"):
+            loader = ConfigLoader(MyConfig)
+            loader.parse_args([
+                '--nested.c=invalid',
+                '--nested.d=True',
+            ])
+            _ = loader.get()
+
+        with pytest.raises(ValueError,
+                           match=r"at \.nested\.d: config attribute is "
+                                 r"required but not set"):
+            loader = ConfigLoader(MyConfig)
+            loader.parse_args([])
+            _ = loader.get()
+
+    def test_parse_args_nested(self):
+        class Nested2(Config):
+            b = 456
+
+        class Nested3(Config):
+            c = 789
+
+        class MyConfig(Config):
+            class nested1(Config):
+                a = 123
+
+            nested2 = ConfigField(Nested2)
+            nested3 = Nested3()
+
+        # test help message
+        loader = ConfigLoader(MyConfig)
+        parser = loader.build_arg_parser()
+        self.assertRegex(
+            parser.format_help(),
+            r"[^@]*"
+            r"--nested1\.a\s+NESTED1\.A\s+\(default 123\)\s+"
+            r"--nested2\.b\s+NESTED2\.B\s+\(default 456\)\s+"
+            r"--nested3\.c\s+NESTED3\.C\s+\(default 789\)\s+"
+        )
+
+        # test parse
+        loader.parse_args([
+            '--nested1.a=1230',
+            '--nested2.b=4560',
+            '--nested3.c=7890'
+        ])
+        self.assertEqual(
+            loader.get(),
+            MyConfig(nested1=MyConfig.nested1(a=1230), nested2=Nested2(b=4560),
+                     nested3=Nested3(c=7890))
+        )
 
 
 class ValidatorTestCase(unittest.TestCase):
@@ -204,6 +353,42 @@ class ValidatorTestCase(unittest.TestCase):
                 assert (context.get_path() == '.a.b')
             assert (context.get_path() == '.a')
         assert (context.get_path() == '')
+
+    def test_get_validator(self):
+        # test validator on empty field
+        validator = get_validator(ConfigField())
+        self.assertIsInstance(validator, FieldValidator)
+        self.assertIsNone(validator.sub_validator)
+
+        # test nested config objects
+        class Nested2(Config): pass
+        class Nested3(Config): pass
+        class MyConfig(Config):
+            class nested1(Config): pass
+
+            nested2 = ConfigField(Nested2)
+            nested3 = Nested3()
+
+        validator = get_validator(MyConfig.nested1)
+        self.assertIsInstance(validator, ConfigValidator)
+        self.assertIs(validator.config_cls, MyConfig.nested1)
+
+        validator = get_validator(MyConfig.nested2)
+        self.assertIsInstance(validator, FieldValidator)
+        self.assertIsInstance(validator.sub_validator, ConfigValidator)
+        self.assertIs(validator.sub_validator.config_cls, Nested2)
+
+        validator = get_validator(MyConfig.nested3)
+        self.assertIsInstance(validator, ConfigValidator)
+        self.assertIs(validator.config_cls, Nested3)
+
+        validator = get_validator(MyConfig().nested1)
+        self.assertIsInstance(validator, ConfigValidator)
+        self.assertIs(validator.config_cls, MyConfig.nested1)
+
+        validator = get_validator(MyConfig().nested3)
+        self.assertIsInstance(validator, ConfigValidator)
+        self.assertIs(validator.config_cls, Nested3)
 
     def test_IntValidator(self):
         v = IntValidator()
