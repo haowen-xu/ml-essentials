@@ -6,11 +6,11 @@ from tempfile import TemporaryDirectory
 
 import pytest
 
-from ml_essentials.config import (is_config_attribute, Config,
-                                  ConfigField, BoolValidator, ValidationContext,
-                                  ConfigValidator, StrValidator, FloatValidator,
-                                  IntValidator, ConfigValidationError,
-                                  get_validator, ConfigLoader, FieldValidator)
+from mltk.config import (is_config_attribute, Config,
+                         ConfigField, BoolValidator, ValidationContext,
+                         ConfigValidator, StrValidator, FloatValidator,
+                         IntValidator, ConfigValidationError,
+                         get_validator, ConfigLoader, FieldValidator)
 
 
 class ConfigTestCase(unittest.TestCase):
@@ -112,6 +112,28 @@ class ConfigTestCase(unittest.TestCase):
         with pytest.raises(AttributeError,
                            match='`name` must not contain \'.\': \'a.b\''):
             setattr(config, 'a.b', 123)
+
+    def test_Config_equality(self):
+        class MyConfig(Config):
+            value = 123
+
+        equal_samples = [
+            (Config(value=123), Config(value=123)),
+            (Config(value=Config(value=123)), Config(value=Config(value=123))),
+        ]
+        inequal_samples = [
+            (Config(value=123), Config(value=456)),
+            (Config(value=123), Config(value=456, value2=789)),
+            (Config(value=Config(value=123)), Config(value=Config(value=456))),
+            (Config(value=123), MyConfig()),
+        ]
+
+        for a, b in equal_samples:
+            self.assertEqual(a, b)
+            self.assertEqual(hash(a), hash(b))
+
+        for a, b in inequal_samples:
+            self.assertNotEqual(a, b)
 
 
 class ConfigLoaderTestCase(unittest.TestCase):

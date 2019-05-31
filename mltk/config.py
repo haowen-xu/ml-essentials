@@ -177,7 +177,7 @@ class Config(object):
     Nested :class:`Config` sub-classes will be converted into instances:
 
     >>> YourConfig.test
-    <class 'ml_essentials.config.YourConfig.test'>
+    <class 'mltk.config.YourConfig.test'>
     >>> config.test
     YourConfig.test(batch_size=256)
 
@@ -188,7 +188,7 @@ class Config(object):
     >>> config.max_step
     Traceback (most recent call last):
         ...
-    ml_essentials.config.ConfigAttributeNotSetError: ...
+    mltk.config.ConfigAttributeNotSetError: ...
 
     You may add a new config attribute by simply set its value:
 
@@ -234,7 +234,7 @@ class Config(object):
         >>> config.validate()
         Traceback (most recent call last):
             ...
-        ml_essentials.config.ConfigValidationError: at .activation: value is not one of: ['sigmoid', 'relu', 'leaky_relu']
+        mltk.config.ConfigValidationError: at .activation: value is not one of: ['sigmoid', 'relu', 'leaky_relu']
 
         See :meth:`validate()` for more details about validation.
     """
@@ -275,7 +275,7 @@ class Config(object):
         return True
 
     def __hash__(self):
-        return hash([(key, self[key]) for key in sorted(self)])
+        return hash(tuple([(key, self[key]) for key in sorted(self)]))
 
     def __getattribute__(self, name):
         val = object.__getattribute__(self, name)
@@ -471,7 +471,7 @@ class Config(object):
             >>> config.validate()  # will fail with an error
             Traceback (most recent call last):
                 ...
-            ml_essentials.config.ConfigValidationError: at .child: config attribute is required but not set
+            mltk.config.ConfigValidationError: at .child: config attribute is required but not set
             >>> config.validate(ignore_missing=True)  # okay
             ParentConfig(new_value=123)
         """
@@ -551,7 +551,7 @@ class Config(object):
         >>> config.validate(validate_all=True)
         Traceback (most recent call last):
             ...
-        ml_essentials.config.ConfigValidationError: at .a: invalid literal for int() with base 10: 'invalid int'
+        mltk.config.ConfigValidationError: at .a: invalid literal for int() with base 10: 'invalid int'
         at .b: could not convert string to float: 'invalid float'
 
         Args:
@@ -1078,7 +1078,7 @@ class FieldValidator(Validator):
     >>> validator.validate(None)
     Traceback (most recent call last):
         ...
-    ml_essentials.config.ConfigValidationError: null value is not allowed
+    mltk.config.ConfigValidationError: null value is not allowed
 
     >>> validator = FieldValidator(YourConfig.c)
     >>> validator.validate('hello')
@@ -1086,7 +1086,7 @@ class FieldValidator(Validator):
     >>> validator.validate('invalid str')
     Traceback (most recent call last):
         ...
-    ml_essentials.config.ConfigValidationError: value is not one of: ['hello', 'bye']
+    mltk.config.ConfigValidationError: value is not one of: ['hello', 'bye']
     """
 
     def __init__(self, field: ConfigField):
@@ -1196,7 +1196,7 @@ class IntValidator(Validator):
     >>> validator.validate(123.5)
     Traceback (most recent call last):
         ...
-    ml_essentials.config.ConfigValidationError: ...
+    mltk.config.ConfigValidationError: ...
     """
 
     def _validate(self, value, context):
@@ -1267,7 +1267,7 @@ class BoolValidator(Validator):
     >>> validator.validate('bad literal')
     Traceback (most recent call last):
         ...
-    ml_essentials.config.ConfigValidationError: ...
+    mltk.config.ConfigValidationError: ...
     """
 
     def _validate(self, value, context):
@@ -1351,7 +1351,7 @@ class ConfigValidator(Validator):
     >>> validator.validate(value)
     Traceback (most recent call last):
         ...
-    ml_essentials.config.ConfigValidationError: at .max_step: config attribute is required but not set
+    mltk.config.ConfigValidationError: at .max_step: config attribute is required but not set
     >>> validator.validate(value, ValidationContext(ignore_missing=True))
     YourConfig(learning_rate=None, max_epoch=100)
 
@@ -1360,7 +1360,7 @@ class ConfigValidator(Validator):
     >>> validator.validate('hello')
     Traceback (most recent call last):
         ...
-    ml_essentials.config.ConfigValidationError: value cannot be casted into YourConfig
+    mltk.config.ConfigValidationError: value cannot be casted into YourConfig
     """
 
     def __init__(self, config_cls: Type[Config]):
