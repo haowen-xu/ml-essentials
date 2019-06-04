@@ -1,9 +1,12 @@
-from typing import Callable, Dict, Iterator
+from typing import Callable, Dict, Iterator, Generic, TypeVar
 
 __all__ = ['Event', 'EventHost']
 
 
-class Event(object):
+TCallback = TypeVar('TCallback')
+
+
+class Event(Generic[TCallback]):
     """
     Event object, should only be constructed by :class:`EventHost`.
     """
@@ -26,7 +29,7 @@ class Event(object):
         """
         self.fire(*args, **kwargs)
 
-    def on(self, callback: Callable):
+    def on(self, callback: TCallback):
         """
         Register `callback` to this event.
 
@@ -35,7 +38,7 @@ class Event(object):
         """
         self._callbacks.append(callback)
 
-    def off(self, callback: Callable):
+    def off(self, callback: TCallback):
         """
         Unregister `callback` from this event.
 

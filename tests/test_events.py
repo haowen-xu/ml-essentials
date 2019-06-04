@@ -157,3 +157,30 @@ class EventTestCase(unittest.TestCase):
         init()
         ev.reverse_fire()
         self.assertListEqual(t, [-10, 20, -3, 4])
+
+    def test_no_side_effect(self):
+        events = EventHost()
+        events2 = EventHost()
+
+        # disconnect a non-connected host will bring no side effect
+        events.disconnect(events2)
+
+        # fire a non-exist event will bring no side effect
+        events.fire('not-exist')
+        self.assertEqual(events._events, {})
+
+        events.reverse_fire('not-exist')
+        self.assertEqual(events._events, {})
+
+        # un-register from a non-exist event will bring no side effect
+        events.off('not-exist', print)
+        self.assertEqual(events._events, {})
+
+        # fire an event with no callback will bring no side effect
+        events['empty-event'].fire()
+        self.assertEqual(list(events._events.keys()), ['empty-event'])
+        self.assertEqual(events['empty-event']._callbacks, [])
+
+        # un-register from an empty event will bring no side effect
+        events['empty-event'].off(print)
+        self.assertEqual(events['empty-event']._callbacks, [])

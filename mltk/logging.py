@@ -1,8 +1,19 @@
-from typing import Tuple, Union, Iterable
+# -*- coding: utf-8 -*-
+
+from collections import defaultdict
+from typing import Tuple, Union, Iterable, Dict, Optional, Callable, Any
 
 import numpy as np
 
-__all__ = ['StatisticsCollector']
+from mltk.events import EventHost, Event
+from mltk.utils import format_duration
+
+__all__ = ['StatisticsCollector', 'MetricLogger']
+
+MetricType = Union[int, float, np.ndarray]
+MetricSortKeyType = Callable[[str], Any]
+MetricFormatterType = Callable[[str, MetricType], Any]
+MetricsCollectedCallbackType = Callable[[Dict[str, MetricType]], None]
 
 
 class StatisticsCollector(object):
@@ -184,3 +195,206 @@ class StatisticsCollector(object):
         update_array(self._mean, values)
         update_array(self._square, values ** 2)
         self._counter += batch_weight.size
+
+
+def metrics_sort_key(key: str):
+    key_suffix = key.lower().rsplit('_', 1)[-1]
+    if key_suffix in ('time', 'timer'):
+        return -1, key
+    else:
+        return 0, key
+
+
+def metrics_formatter(key: str, value: MetricType) -> str:
+    key_suffix = key.lower().rsplit('_', 1)[-1]
+    if key_suffix in ('time', 'timer'):
+        return format_duration(value)
+    else:
+        return f'{float(value):.6g}'
+
+
+class MetricLogger(object):
+    """
+    Class to log training and evaluation metrics.
+
+    The metric statistics during a certain period can be obtained by
+    :meth:`format_logs()`.  Note that each time :meth:`format_logs()`
+    is called, the statistics will be cleared, unless calling
+    `format_logs(clear_stats=False)`.
+
+    >>> logger = MetricLogger()
+    >>> logger.collect(train_loss=5, train_acc=90, train_time=30)
+    >>> logger.collect(train_loss=6)
+    >>> logger.format_logs()  # note format_logs will clear the stats
+    'train_time: 30s; train_acc: 90; train_loss: 5.5 (±0.5)'
+    >>> logger.collect(train_loss=5)
+    >>> logger.format_logs()
+    'train_loss: 5'
+
+    It is possible to get notified when metrics are collected.  For example:
+
+    >>> logger = MetricLogger()
+    >>> logger.metrics_collected.on(lambda d: print('callback', d))
+    >>> logger.collect({'train_loss': 5}, train_acc=90)
+    callback {'train_loss': 5, 'train_acc': 90}
+    """
+
+    def __init__(self, sort_key: MetricSortKeyType = metrics_sort_key,
+                 formatter: MetricFormatterType = metrics_formatter):
+        """
+        Construct a new :class:`MetricLogger`.
+
+        Args:
+            sort_key: The function to get the key for sorting metrics.
+                For example, the following sort_key function will place
+                all "time" metrics (e.g., "train_time") at first,
+                all "loss" metrics (e.g., "train_loss") the second,
+                and all other metrics at last.
+
+                >>> def my_sort_key(key: str):
+                ...     key_suffix = key.lower().rsplit('_', 1)[-1]
+                ...     if key_suffix == 'time':
+                ...         return -2, key
+                ...     elif key_suffix == 'loss':
+                ...         return -1, key
+                ...     else:
+                ...         return 0, key
+
+                >>> logger = MetricLogger(sort_key=my_sort_key)
+                >>> logger.collect(train_loss=5, train_acc=90, train_time=30)
+                >>> logger.format_logs()
+                'train_time: 30s; train_loss: 5; train_acc: 90'
+
+            formatter: The function to format the value of a metric.
+                It should support formatting both the mean and std.
+                For example:
+
+                >>> def my_formatter(key: str, value: MetricType) -> str:
+                ...     key_suffix = key.rsplit('_')[-1]
+                ...     if key_suffix == 'time':
+                ...         return format_duration(value, short_units=False)
+                ...     elif key_suffix == 'loss':
+                ...         return f'{value:.6f}'
+                ...     else:
+                ...         return f'{value:.6g}'
+
+                >>> logger = MetricLogger(formatter=my_formatter)
+                >>> logger.collect(train_loss=5, train_acc=90, train_time=30)
+                >>> logger.format_logs()
+                'train_time: 30 seconds; train_acc: 90; train_loss: 5.000000'
+        """
+        self._metrics_sort_key = sort_key
+        self._metrics_formatter = formatter
+
+        # dict to record the metric statistics of current batch
+        self._metric_stats = defaultdict(StatisticsCollector)
+        # event host and events
+        self._events = EventHost()
+        self._metrics_collected = self.events['metrics_collected']
+
+    @property
+    def events(self) -> EventHost:
+        """Get the event host."""
+        return self._events
+
+    @property
+    def metrics_collected(self) -> Event[MetricsCollectedCallbackType]:
+        """Get the metrics collected event."""
+        return self._metrics_collected
+
+    def clear_stats(self):
+        """Clear the metrics statistics."""
+        for v in self._metric_stats.values():
+            v.reset()
+
+    def collect(self, metrics: Optional[Dict[str, MetricType]] = None,
+                **kwargs: MetricType):
+        """
+        Collect the metrics.
+
+        Metrics can be specified as dict via the first positional argument,
+        or via named arguments.  For example:
+
+        >>> logger = MetricLogger()
+        >>> logger.collect(train_loss=5)
+        >>> logger.collect({'train_loss': 6, 'train_acc': 90})
+        >>> logger.format_logs()
+        'train_acc: 90; train_loss: 5.5 (±0.5)'
+
+        If a metric appears in both the first positional argument and the
+        named arguments, then the value from the named arguments will
+        override the value from the positional argument.  For example:
+
+        >>> logger = MetricLogger()
+        >>> logger.collect({'train_loss': 5}, train_loss=6)
+        >>> logger.format_logs()
+        'train_loss: 6'
+
+        Calling :meth:`collect()` without any metric will cause no effect
+        (in particular, :obj:`metrics_updated` event will not be fired).
+
+        >>> logger = MetricLogger()
+        >>> logger.metrics_collected.on(lambda d: print('callback', d))
+        >>> logger.collect(train_loss=5)
+        callback {'train_loss': 5}
+        >>> logger.collect()
+
+        Args:
+            metrics: The metrics dict.
+            \\**kwargs: The metrics.
+        """
+        if metrics and kwargs:
+            merged = {}
+            merged.update(metrics)
+            merged.update(kwargs)
+        elif metrics:
+            merged = metrics
+        elif kwargs:
+            merged = kwargs
+        else:
+            return
+
+        for key, value in merged.items():
+            self._metric_stats[key].collect(value)
+        self.metrics_collected.fire(merged)
+
+    def format_logs(self, clear_stats: bool = True) -> str:
+        """
+        Format the metric statistics as log.
+
+        The metric statistics will be cleared after :meth:`format_logs()`
+        is called, unless `clear_stats` is set to :obj:`False`.
+
+        >>> logger = MetricLogger()
+        >>> logger.collect(train_loss=5)
+        >>> logger.format_logs()
+        'train_loss: 5'
+        >>> logger.collect(train_loss=6)
+        >>> logger.format_logs(clear_stats=False)
+        'train_loss: 6'
+        >>> logger.collect(train_loss=5)
+        >>> logger.format_logs()
+        'train_loss: 5.5 (±0.5)'
+
+        Args:
+            clear_stats: Whether or not to clear the statistics after
+                formatting the log? (default :obj:`True`)
+
+        Returns:
+            The formatted log.
+        """
+        buf = []
+        for key in sorted(self._metric_stats.keys(),
+                          key=self._metrics_sort_key):
+            metric_stat = self._metric_stats[key]
+            if metric_stat.has_value:
+                mean = self._metrics_formatter(key, metric_stat.mean)
+                if metric_stat.counter > 1:
+                    std = self._metrics_formatter(key, metric_stat.stddev)
+                    std = f' (±{std})'
+                else:
+                    std = ''
+                buf.append(f'{key}: {mean}{std}')
+        if clear_stats:
+            self.clear_stats()
+        return '; '.join(buf)
