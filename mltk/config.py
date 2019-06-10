@@ -793,8 +793,7 @@ class ConfigLoader(Generic[TConfig]):
 
             def __init__(self, validator: Validator, option_strings, dest,
                          **kwargs):
-                super(_ConfigAction, self).__init__(option_strings, dest,
-                                                    **kwargs)
+                super().__init__(option_strings, dest, **kwargs)
                 self._validator = validator
 
             def __call__(self, parser, namespace, values,
