@@ -234,7 +234,7 @@ class MetricLogger(object):
     It is possible to get notified when metrics are collected.  For example:
 
     >>> logger = MetricLogger()
-    >>> logger.metrics_collected.on(lambda d: print('callback', d))
+    >>> logger.on_metrics_collected.do(lambda d: print('callback', d))
     >>> logger.collect({'train_loss': 5}, train_acc=90)
     callback {'train_loss': 5, 'train_acc': 90}
     """
@@ -287,10 +287,14 @@ class MetricLogger(object):
         self._metrics_formatter = formatter
 
         # dict to record the metric statistics of current batch
-        self._metric_stats = defaultdict(StatisticsCollector)
+        self._stats_collectors = defaultdict(StatisticsCollector)
         # event host and events
         self._events = EventHost()
-        self._metrics_collected = self.events['metrics_collected']
+        self._on_metrics_collected = self.events['metrics_collected']
+
+    @property
+    def stats_collectors(self) -> Dict[str, StatisticsCollector]:
+        return self._stats_collectors
 
     @property
     def events(self) -> EventHost:
@@ -298,13 +302,13 @@ class MetricLogger(object):
         return self._events
 
     @property
-    def metrics_collected(self) -> Event[MetricsCollectedCallbackType]:
+    def on_metrics_collected(self) -> Event[MetricsCollectedCallbackType]:
         """Get the metrics collected event."""
-        return self._metrics_collected
+        return self._on_metrics_collected
 
     def clear_stats(self):
         """Clear the metrics statistics."""
-        for v in self._metric_stats.values():
+        for v in self._stats_collectors.values():
             v.reset()
 
     def collect(self, metrics: Optional[Dict[str, MetricType]] = None,
@@ -334,7 +338,7 @@ class MetricLogger(object):
         (in particular, :obj:`metrics_updated` event will not be fired).
 
         >>> logger = MetricLogger()
-        >>> logger.metrics_collected.on(lambda d: print('callback', d))
+        >>> logger.on_metrics_collected.do(lambda d: print('callback', d))
         >>> logger.collect(train_loss=5)
         callback {'train_loss': 5}
         >>> logger.collect()
@@ -355,8 +359,8 @@ class MetricLogger(object):
             return
 
         for key, value in merged.items():
-            self._metric_stats[key].collect(value)
-        self.metrics_collected.fire(merged)
+            self._stats_collectors[key].collect(value)
+        self.on_metrics_collected.fire(merged)
 
     def format_logs(self, clear_stats: bool = True) -> str:
         """
@@ -384,9 +388,9 @@ class MetricLogger(object):
             The formatted log.
         """
         buf = []
-        for key in sorted(self._metric_stats.keys(),
+        for key in sorted(self._stats_collectors.keys(),
                           key=self._metrics_sort_key):
-            metric_stat = self._metric_stats[key]
+            metric_stat = self._stats_collectors[key]
             if metric_stat.has_value:
                 mean = self._metrics_formatter(key, metric_stat.mean)
                 if metric_stat.counter > 1:

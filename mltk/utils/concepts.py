@@ -1,4 +1,9 @@
-__all__ = ['AutoInitAndCloseable']
+from abc import ABC
+
+__all__ = [
+    'AutoInitAndCloseable', 'NoReentrantContext', 'Disposable',
+    'DisposableContext'
+]
 
 
 class AutoInitAndCloseable(object):
@@ -46,3 +51,83 @@ class AutoInitAndCloseable(object):
     def __exit__(self, exc_type, exc_val, exc_tb):
         """Cleanup the internal states."""
         self.close()
+
+
+class Disposable(object):
+    """
+    Classes which can only be used once.
+    """
+
+    _already_used = False
+
+    def _check_usage_and_set_used(self):
+        """
+        Check whether the usage flag, ensure the object has not been used,
+        and then set it to be used.
+        """
+        if self._already_used:
+            raise RuntimeError(f'Disposable object cannot be used twice: '
+                               f'{self!r}.')
+        self._already_used = True
+
+
+class NoReentrantContext(object):
+    """
+    Base class for contexts which are not reentrant (i.e., if there is
+    a context opened by ``__enter__``, and it has not called ``__exit__``,
+    the ``__enter__`` cannot be called again).
+    """
+
+    _is_entered = False
+
+    def _enter(self):
+        """
+        Enter the context.  Subclasses should override this instead of
+        the true ``__enter__`` method.
+        """
+        raise NotImplementedError()
+
+    def _exit(self, exc_type, exc_val, exc_tb):
+        """
+        Exit the context.  Subclasses should override this instead of
+        the true ``__exit__`` method.
+        """
+        raise NotImplementedError()
+
+    def _require_entered(self):
+        """
+        Require the context to be entered.
+
+        Raises:
+            RuntimeError: If the context is not entered.
+        """
+        if not self._is_entered:
+            raise RuntimeError(f'Context is required be entered: {self!r}.')
+
+    def __enter__(self):
+        if self._is_entered:
+            raise RuntimeError(f'Context is not reentrant: {self!r}.')
+        ret = self._enter()
+        self._is_entered = True
+        return ret
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        if self._is_entered:
+            self._is_entered = False
+            return self._exit(exc_type, exc_val, exc_tb)
+
+
+class DisposableContext(NoReentrantContext, ABC):
+    """
+    Base class for contexts which can only be entered once.
+    """
+
+    _has_entered = False
+
+    def __enter__(self):
+        if self._has_entered:
+            raise RuntimeError(f'A disposable context cannot be entered '
+                               f'twice: {self!r}.')
+        ret = super(DisposableContext, self).__enter__()
+        self._has_entered = True
+        return ret

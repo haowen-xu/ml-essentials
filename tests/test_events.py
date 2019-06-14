@@ -23,8 +23,8 @@ class EventTestCase(unittest.TestCase):
         self.assertIn('ev', events)
 
         # test add callback
-        ev.on(f1)
-        ev.on(f2)
+        ev.do(f1)
+        ev.do(f2)
 
         # test fire
         ev.fire(123, second=456)
@@ -40,7 +40,7 @@ class EventTestCase(unittest.TestCase):
             f.reset_mock()
 
         # test remove callback
-        ev.off(f1)
+        ev.undo(f1)
 
         # test call via `__call__`
         ev(123, second=456)
@@ -127,10 +127,10 @@ class EventTestCase(unittest.TestCase):
 
         events1.on('ev', cb1)
         ev = events1['ev']
-        ev.on(cb2)
+        ev.do(cb2)
 
         events2.on('ev', cb3)
-        events2['ev'].on(cb4)
+        events2['ev'].do(cb4)
         events1.connect(events2)
 
         # test order of `EventHost.fire`
@@ -182,5 +182,5 @@ class EventTestCase(unittest.TestCase):
         self.assertEqual(events['empty-event']._callbacks, [])
 
         # un-register from an empty event will bring no side effect
-        events['empty-event'].off(print)
+        events['empty-event'].undo(print)
         self.assertEqual(events['empty-event']._callbacks, [])

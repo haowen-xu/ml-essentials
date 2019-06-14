@@ -1,10 +1,11 @@
 import time
-from typing import Union, Optional, Generator
+from typing import *
 
 import numpy as np
 
 __all__ = [
-    'format_duration', 'ETA', 'minibatch_slices_iterator'
+    'format_duration', 'ETA', 'minibatch_slices_iterator',
+    'optional_apply',
 ]
 
 
@@ -74,7 +75,7 @@ class ETA(object):
 
     >>> now = time.time()
     >>> eta = ETA()
-    >>> eta.get_eta(progress=0.0, now=now)  # record the start time
+    >>> eta.take_snapshot(progress=0.0, now=now)  # record the start time
     >>> eta.get_eta(progress=0.01, now=now + 5.)  # i.e., 1% work costs 5s
     495.0
     """
@@ -175,3 +176,20 @@ def minibatch_slices_iterator(length: int,
         start += batch_size
     if not skip_incomplete and start < length:
         yield slice(start, length, 1)
+
+
+def optional_apply(f, value):
+    """
+    If `value` is not None, return `f(value)`, otherwise return None.
+
+    >>> optional_apply(int, None) is None
+    True
+    >>> optional_apply(int, '123')
+    123
+
+    Args:
+        f: The function to apply on `value`.
+        value: The value, maybe None.
+    """
+    if value is not None:
+        return f(value)

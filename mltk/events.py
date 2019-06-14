@@ -29,7 +29,7 @@ class Event(Generic[TCallback]):
         """
         self.fire(*args, **kwargs)
 
-    def on(self, callback: TCallback):
+    def do(self, callback: TCallback):
         """
         Register `callback` to this event.
 
@@ -38,7 +38,7 @@ class Event(Generic[TCallback]):
         """
         self._callbacks.append(callback)
 
-    def off(self, callback: TCallback):
+    def undo(self, callback: TCallback):
         """
         Unregister `callback` from this event.
 
@@ -97,7 +97,7 @@ class EventHost(object):
     ['updated']
     >>> on_updated
     Event(updated)
-    >>> on_updated.on(print_args)
+    >>> on_updated.do(print_args)
     >>> on_updated.fire(123, second=456)
     (123,) {'second': 456}
     """
@@ -158,7 +158,7 @@ class EventHost(object):
             name: Name of the event.
             callback: Callback to register.
         """
-        self[name].on(callback)
+        self[name].do(callback)
 
     def off(self, name: str, callback: Callable):
         """
@@ -170,7 +170,7 @@ class EventHost(object):
                 No error will be raised if it has not been registered yet.
         """
         if name in self._events:
-            self._events[name].off(callback)
+            self._events[name].undo(callback)
 
     def fire(self, name, *args, **kwargs):
         """
