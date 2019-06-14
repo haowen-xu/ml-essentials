@@ -7,8 +7,7 @@ from argparse import Action, ArgumentParser
 from collections import OrderedDict, namedtuple
 from contextlib import contextmanager
 from os import PathLike
-from typing import (Any, Type, Union, Iterable, List, Optional, Generic,
-                    TypeVar)
+from typing import *
 
 import numpy as np
 import yaml
@@ -20,6 +19,7 @@ __all__ = [
 
 
 NOT_SET = ...
+ValidatorFunctionType = Callable[[Any], Any]
 
 
 class ConfigAttributeNotSetError(ValueError):
@@ -60,9 +60,14 @@ class ConfigField(object):
     Represent a config attribute field.
     """
 
-    def __init__(self, type: Type = None, default: Any = NOT_SET,
-                 description: str = None, nullable: bool = True,
-                 choices: Iterable = None):
+    def __init__(self,
+                 type: Optional[Type] = None,
+                 default: Any = NOT_SET,
+                 description: Optional[str] = None,
+                 nullable: bool = True,
+                 choices: Optional[Iterable] = None,
+                 envvar: Optional[str] = None,
+                 validator_fn: Optional[ValidatorFunctionType] = None):
         """
         Construct a new :class:`ConfigField`.
 
@@ -73,6 +78,9 @@ class ConfigField(object):
             description: The config description.
             nullable: Whether or not :obj:`None` is a valid value?
             choices: Optional valid choices for the config value.
+            envvar: Key of the environment variable, used as the default
+                value for this config field.
+            validator_fn: Custom validator function for input values.
         """
         nullable = bool(nullable)
 
@@ -81,6 +89,8 @@ class ConfigField(object):
         self._description = description
         self._nullable = nullable
         self._choices = tuple(choices) if choices is not None else None
+        self._envvar = envvar
+        self._validator_fn = validator_fn
 
     def __repr__(self):
         attributes = []
@@ -91,11 +101,15 @@ class ConfigField(object):
         attributes.append(f'nullable={self.nullable}')
         if self.choices:
             attributes.append(f'choices={list(self.choices)}')
+        if self.envvar:
+            attributes.append(f'envvar={self.envvar!r}')
+        if self.validator_fn is not None:
+            attributes.append(f'custom validator')
 
         return f'ConfigField({", ".join(attributes)})'
 
     @property
-    def type(self) -> Type:
+    def type(self) -> Optional[Type]:
         """Get the value type."""
         return self._type
 
@@ -116,11 +130,19 @@ class ConfigField(object):
         True
         >>> field.get_default_value() is list_value
         False
+
+        If ``self.envvar`` is not None and ``os.environ[self.envvar]`` exists,
+        the value from the environment variable will be used instead of
+        the value of ``self.default_value``.
         """
-        return copy.deepcopy(self._default_value)
+        if self.envvar is not None and self.envvar in os.environ:
+            validator = get_validator(self)
+            return validator.validate(os.environ[self.envvar])
+        else:
+            return copy.deepcopy(self._default_value)
 
     @property
-    def description(self) -> str:
+    def description(self) -> Optional[str]:
         """Get the config description."""
         return self._description
 
@@ -133,6 +155,16 @@ class ConfigField(object):
     def choices(self) -> Optional[tuple]:
         """Get the valid choices of the config value."""
         return self._choices
+
+    @property
+    def envvar(self) -> Optional[str]:
+        """Get the key of the environment variable."""
+        return self._envvar
+
+    @property
+    def validator_fn(self) -> Optional[ValidatorFunctionType]:
+        """Get the custom validator function."""
+        return self._validator_fn
 
 
 class Config(object):
@@ -827,12 +859,13 @@ class ConfigLoader(Generic[TConfig]):
         # gather the nested config fields
         def get_field_help(field):
             config_help = field.description or ''
+            default_value = field.get_default_value()
             if config_help:
                 config_help += ' '
-            if field.default_value is NOT_SET:
+            if default_value is NOT_SET:
                 config_help += '(required'
             else:
-                config_help += f'(default {field.default_value}'
+                config_help += f'(default {default_value}'
             if field.choices:
                 config_help += f'; choices {sorted(field.choices)}'
             config_help += ')'
@@ -1057,6 +1090,24 @@ class Validator(object):
             return value
 
 
+class CustomValidator(Validator):
+    """Custom validator function wrapper."""
+
+    def __init__(self, validator_fn: ValidatorFunctionType):
+        self._validator_fn = validator_fn
+
+    @property
+    def validator_fn(self) -> ValidatorFunctionType:
+        """Get the validator function."""
+        return self._validator_fn
+
+    def __repr__(self):
+        return f'{self.__class__.__qualname__}({self.validator_fn})'
+
+    def _validate(self, value, context: ValidationContext):
+        return self.validator_fn(value)
+
+
 class FieldValidator(Validator):
     """
     Validator for a specified config attribute.
@@ -1090,8 +1141,12 @@ class FieldValidator(Validator):
 
     def __init__(self, field: ConfigField):
         self._field = field
-        self._sub_validator = get_validator(
-            field.type if field.type is not None else field.default_value)
+        if field.validator_fn is not None:
+            self._sub_validator = CustomValidator(field.validator_fn)
+        elif field.type is not None:
+            self._sub_validator = get_validator(field.type)
+        else:
+            self._sub_validator = get_validator(field.default_value)
 
     def __repr__(self):
         return f'FieldValidator({self.field!r})'

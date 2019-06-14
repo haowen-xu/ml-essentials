@@ -10,7 +10,8 @@ from mltk.config import (is_config_attribute, Config,
                          ConfigField, BoolValidator, ValidationContext,
                          ConfigValidator, StrValidator, FloatValidator,
                          IntValidator, ConfigValidationError,
-                         get_validator, ConfigLoader, FieldValidator)
+                         get_validator, ConfigLoader, FieldValidator,
+                         CustomValidator)
 
 
 class ConfigTestCase(unittest.TestCase):
@@ -102,6 +103,70 @@ class ConfigTestCase(unittest.TestCase):
             repr(field),
             'ConfigField(type=int, nullable=True, choices=[1, 2, 3])'
         )
+
+        # specifying the custom validator
+        def str_list_validator(value):
+            return [str(s) for s in value]
+
+        field = ConfigField(list, validator_fn=str_list_validator)
+        self.assertEqual(
+            repr(field),
+            'ConfigField(type=list, nullable=True, custom validator)'
+        )
+        validator = get_validator(field)
+        self.assertListEqual(validator.validate([1, '2']), ['1', '2'])
+
+    def test_ConfigField_envvar(self):
+        field = ConfigField(int, default=123, envvar='MY_FIELD')
+        self.assertEqual(
+            repr(field),
+            'ConfigField(type=int, default=123, nullable=True, '
+            'envvar=\'MY_FIELD\')'
+        )
+        self.assertEqual(field.get_default_value(), 123)
+
+        # test validator okay
+        try:
+            os.environ['MY_FIELD'] = '123'
+            self.assertEqual(field.get_default_value(), 123)
+        finally:
+            del os.environ['MY_FIELD']
+
+        # test validator error
+        try:
+            os.environ['MY_FIELD'] = 'xxx'
+            with pytest.raises(ValueError,
+                               match=r"invalid literal for int\(\) with base "
+                                     r"10: 'xxx'"):
+                _ = field.get_default_value()
+        finally:
+            del os.environ['MY_FIELD']
+
+        # test no validator
+        field = ConfigField(envvar='MY_FIELD')
+        self.assertEqual(
+            repr(field),
+            'ConfigField(nullable=True, envvar=\'MY_FIELD\')'
+        )
+        self.assertEqual(field.get_default_value(), ...)
+
+        try:
+            os.environ['MY_FIELD'] = 'hello'
+            self.assertEqual(field.get_default_value(), 'hello')
+        finally:
+            del os.environ['MY_FIELD']
+
+    def test_Config_envvar(self):
+        class MyConfig(Config):
+            value = ConfigField(int, default=1, envvar='MY_FIELD')
+
+        self.assertEqual(MyConfig().value, 1)
+
+        try:
+            os.environ['MY_FIELD'] = '123'
+            self.assertEqual(MyConfig().value, 123)
+        finally:
+            del os.environ['MY_FIELD']
 
     def test_Config_setattr(self):
         config = Config()
@@ -411,6 +476,11 @@ class ValidatorTestCase(unittest.TestCase):
         validator = get_validator(MyConfig().nested3)
         self.assertIsInstance(validator, ConfigValidator)
         self.assertIs(validator.config_cls, Nested3)
+
+    def test_CustomValidator(self):
+        v = CustomValidator(int)
+        self.assertEquals(repr(v), "CustomValidator(<class 'int'>)")
+        self.assertEqual(v.validate('123'), 123)
 
     def test_IntValidator(self):
         v = IntValidator()
