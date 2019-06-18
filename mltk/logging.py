@@ -302,7 +302,7 @@ class MetricLogger(object):
         return self._events
 
     @property
-    def on_metrics_collected(self) -> Event[MetricsCollectedCallbackType]:
+    def on_metrics_collected(self) -> Event:
         """Get the metrics collected event."""
         return self._on_metrics_collected
 

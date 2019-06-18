@@ -207,16 +207,17 @@ class ConfigLoaderTestCase(unittest.TestCase):
         class MyConfig(Config):
             pass
 
-        loader = ConfigLoader(config_cls=MyConfig)
+        loader = ConfigLoader(MyConfig)
         self.assertIs(loader.config_cls, MyConfig)
         self.assertFalse(loader.validate_all)
 
-        loader = ConfigLoader(config_cls=MyConfig, validate_all=True)
+        loader = ConfigLoader(MyConfig(), validate_all=True)
         self.assertTrue(loader.validate_all)
 
         with pytest.raises(TypeError,
-                           match='`config_cls` is not Config or a subclass of '
-                                 'Config: <class \'str\'>'):
+                           match='`config_or_cls` is not Config or a subclass '
+                                 'of Config, or an instance of Config: '
+                                 '<class \'str\'>'):
             _ = ConfigLoader(str)
 
     def test_load_object(self):
@@ -282,6 +283,9 @@ class ConfigLoaderTestCase(unittest.TestCase):
                      nested2=Nested2(b=4560.0),
                      nested3=Nested3(c=7890, d='hello'))
         )
+
+        loader2 = ConfigLoader(loader.get())
+        self.assertEqual(loader2.get(), loader.get())
 
     def test_load_file(self):
         with TemporaryDirectory() as temp_dir:
@@ -477,6 +481,10 @@ class ValidatorTestCase(unittest.TestCase):
         self.assertIsInstance(validator, ConfigValidator)
         self.assertIs(validator.config_cls, Nested3)
 
+        # test the additional type hint
+        validator = get_validator(None, int)
+        self.assertIsInstance(validator, IntValidator)
+
     def test_CustomValidator(self):
         v = CustomValidator(int)
         self.assertEquals(repr(v), "CustomValidator(<class 'int'>)")
@@ -570,6 +578,29 @@ class ValidatorTestCase(unittest.TestCase):
                            match='value is not a ValidatorTestCase.'
                                  'test_ConfigValidator.<locals>.MyConfig'):
             validator.validate(Config(), ValidationContext(strict=True))
+
+        # check user validate
+        class MyConfig(Config):
+            class nested(Config):
+                value = 123
+
+                def user_validate(self):
+                    if self.value < 100:
+                        raise ValueError('`value` must >= 100')
+
+        validator = ConfigValidator(MyConfig)
+        with pytest.raises(ConfigValidationError,
+                           match='at .nested: `value` must >= 100'):
+            validator.validate(
+                Config(nested=Config(value=99)), ValidationContext())
+
+        # check annotation
+        class MyConfig(Config):
+            value: int
+
+        validator = ConfigValidator(MyConfig)
+        self.assertEqual(validator.validate(Config(value='123')),
+                         MyConfig(value=123))
 
         # check validate_all = True
         context = ValidationContext(validate_all=True)

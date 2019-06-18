@@ -42,12 +42,19 @@ class EventTestCase(unittest.TestCase):
         # test remove callback
         ev.undo(f1)
 
+    def test_decorator(self):
+        f = Mock()
+        events = EventHost()
+        ev = events['ev']
+
         # test call via `__call__`
-        ev(123, second=456)
-        self.assertEqual(f1.call_count, 0)
-        self.assertEqual(f2.call_count, 1)
-        self.assertEqual(f2.call_args, ((123,), {'second': 456}))
-        f2.reset_mock()
+        @ev
+        def method(*args, **kwargs):
+            return f(*args, **kwargs)
+
+        ev.fire(123, second=456)
+        self.assertEqual(f.call_count, 1)
+        self.assertEqual(f.call_args, ((123,), {'second': 456}))
 
     def test_EventHost(self):
         f1 = Mock()
@@ -146,11 +153,6 @@ class EventTestCase(unittest.TestCase):
         # test order of `Event.fire`
         init()
         ev.fire()
-        self.assertListEqual(t, [1, -2, 30, -40])
-
-        # test order of `Event.__call__`
-        init()
-        ev()
         self.assertListEqual(t, [1, -2, 30, -40])
 
         # test order of `Event.reverse_fire`

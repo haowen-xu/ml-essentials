@@ -763,7 +763,7 @@ class TrainLoop(DisposableContext):
         return self._events
 
     @property
-    def on_enter_loop(self) -> Event[Callable[[], None]]:
+    def on_enter_loop(self) -> Event:
         """
         Event of entering the loop.
 
@@ -782,7 +782,7 @@ class TrainLoop(DisposableContext):
         return self._on_enter_loop
 
     @property
-    def on_exit_loop(self) -> Event[Callable[[], None]]:
+    def on_exit_loop(self) -> Event:
         """
         Event of exiting the loop.
 
@@ -802,7 +802,7 @@ class TrainLoop(DisposableContext):
         return self._on_exit_loop
 
     @property
-    def on_enter_epoch(self) -> Event[Callable[[int], None]]:
+    def on_enter_epoch(self) -> Event:
         """
         Event of entering an epoch.
 
@@ -819,7 +819,7 @@ class TrainLoop(DisposableContext):
         return self._on_enter_epoch
 
     @property
-    def on_exit_epoch(self) -> Event[Callable[[int], None]]:
+    def on_exit_epoch(self) -> Event:
         """
         Event of exiting an epoch.
 
@@ -837,7 +837,7 @@ class TrainLoop(DisposableContext):
         return self._on_exit_epoch
 
     @property
-    def on_enter_step(self) -> Event[Callable[[int, Optional[Any]], None]]:
+    def on_enter_step(self) -> Event:
         """
         Event of entering a step.
 
@@ -855,7 +855,7 @@ class TrainLoop(DisposableContext):
         return self._on_enter_step
 
     @property
-    def on_exit_step(self) -> Event[Callable[[int], None]]:
+    def on_exit_step(self) -> Event:
         """
         Event of exiting a step.
 
@@ -874,7 +874,7 @@ class TrainLoop(DisposableContext):
         return self._on_exit_step
 
     @property
-    def on_metrics_collected(self) -> Event[Callable[[MetricsDict], None]]:
+    def on_metrics_collected(self) -> Event:
         """
         Event of training metrics having been collected.
 
@@ -895,7 +895,7 @@ class TrainLoop(DisposableContext):
         return self._on_metrics_collected
 
     @property
-    def on_stats_printed(self) -> Event[Callable[[MetricStatsDict], None]]:
+    def on_stats_printed(self) -> Event:
         """
         Event of training metric statistics having been printed.
 

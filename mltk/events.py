@@ -3,10 +3,10 @@ from typing import Callable, Dict, Iterator, Generic, TypeVar
 __all__ = ['Event', 'EventHost']
 
 
-TCallback = TypeVar('TCallback')
+TCallback = Callable[..., None]
 
 
-class Event(Generic[TCallback]):
+class Event(object):
     """
     Event object, should only be constructed by :class:`EventHost`.
     """
@@ -19,15 +19,18 @@ class Event(Generic[TCallback]):
     def __repr__(self):
         return f'Event({self._name})'
 
-    def __call__(self, *args, **kwargs):
+    def __call__(self, method: TCallback):
         """
-        Fire this event.
+        Register `method` as callback to this event.
 
         Args:
-            *args: Positional arguments.
-            **kwargs: Named arguments.
+            method: The callback method.
+
+        Returns:
+            The specified `method`.
         """
-        self.fire(*args, **kwargs)
+        self.do(method)
+        return method
 
     def do(self, callback: TCallback):
         """
