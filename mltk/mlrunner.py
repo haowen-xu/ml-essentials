@@ -189,11 +189,12 @@ class MLRunner(object):
     def doc(self) -> 'ExperimentDoc':
         return self._doc
 
-    def env_dict(self, output_dir, work_dir) -> Dict[str, str]:
+    def env_dict(self, experiment_id, output_dir, work_dir) -> Dict[str, str]:
         """
         Get the environment dict for this process.
 
         Args:
+            experiment_id: The experiment id.
             output_dir: The MLStorage output directory.
             work_dir: The work directory.
         """
@@ -206,6 +207,7 @@ class MLRunner(object):
         # runner default environment variables
         update_env(env, {
             'PYTHONUNBUFFERED': '1',
+            'MLSTORAGE_EXPERIMENT_ID': str(experiment_id),
             'MLRUNNER_OUTPUT_DIR': output_dir,
             'MLSTORAGE_SERVER': self.config.server,
         })
@@ -326,7 +328,11 @@ class MLRunner(object):
             work_dir = output_dir
 
         # prepare for the environment variable
-        env = self.env_dict(output_dir, work_dir)
+        env = self.env_dict(
+            experiment_id=self.doc.id,
+            output_dir=output_dir,
+            work_dir=work_dir
+        )
 
         # update the doc with execution info
         self.doc.update({
