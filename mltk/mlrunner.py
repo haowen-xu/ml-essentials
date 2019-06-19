@@ -266,7 +266,7 @@ class MLRunner(object):
             def format_value(v):
                 if isinstance(v, (tuple, list)):
                     if v[1] is not None:
-                        return f'{v[0]}±{v[1]}'
+                        return f'{v[0]} (±{v[1]})'
                     else:
                         return v[0]
                 else:
