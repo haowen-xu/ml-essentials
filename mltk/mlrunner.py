@@ -12,6 +12,7 @@ import subprocess
 import sys
 import time
 import traceback
+import typing
 import zipfile
 from contextlib import contextmanager, ExitStack
 from logging import getLogger, FileHandler
@@ -29,6 +30,8 @@ __all__ = ['MLRunnerConfig', 'MLRunner']
 
 LOG_LEVEL = 'INFO'
 LOG_FORMAT = '%(asctime)s [%(levelname)-8s] %(message)s'
+
+PatternType = getattr(typing, 'Pattern', getattr(re, 'Pattern', Any))
 
 
 class MLRunnerConfig(Config):
@@ -1335,8 +1338,8 @@ class SourceCopier(object):
     def __init__(self,
                  source_dir: str,
                  dest_dir: str,
-                 includes: List[re.Pattern],
-                 excludes: List[re.Pattern]):
+                 includes: List[PatternType],
+                 excludes: List[PatternType]):
         """
         Construct a new :class:`SourceCopier`.
 
