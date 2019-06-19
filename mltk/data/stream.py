@@ -352,7 +352,7 @@ class DataStream(ABC):
         """Get the NumPy random state associated with this data stream."""
         return self._random_state
 
-    def clone(self, **kwargs):
+    def copy(self, **kwargs):
         """
         Get a copy of this data stream.
 
@@ -366,7 +366,7 @@ class DataStream(ABC):
         ...     print(a)
         [0 1 2]
         [3 4]
-        >>> stream2 = stream.clone(batch_size=4)
+        >>> stream2 = stream.copy(batch_size=4)
         >>> isinstance(stream2, ArraysDataStream)
         True
         >>> for [a] in stream2:
@@ -378,11 +378,11 @@ class DataStream(ABC):
             \\**kwargs: The overrided construction arguments.
 
         Returns:
-            The cloned data stream.
+            The copied data stream.
         """
         raise NotImplementedError()
 
-    def _clone_helper(self, attrs: Iterable[str], **kwargs):
+    def _copy_helper(self, attrs: Iterable[str], **kwargs):
         for attr in attrs:
             kwargs.setdefault(attr, getattr(self, attr))
         return self.__class__(**kwargs)
@@ -912,8 +912,8 @@ class ArraysDataStream(DataStream):
                 skip_incomplete=self.skip_incomplete):
             yield get_slice(batch_s)
 
-    def clone(self, **kwargs):
-        return self._clone_helper(
+    def copy(self, **kwargs):
+        return self._copy_helper(
             ('batch_size', 'shuffle', 'skip_incomplete', 'random_state'),
             arrays=self._arrays,
             **kwargs
@@ -1017,8 +1017,8 @@ class IntSeqDataStream(DataStream):
                 skip_incomplete=self.skip_incomplete):
             yield (to_readonly_array(self._seq[batch_s]),)
 
-    def clone(self, **kwargs):
-        return self._clone_helper(
+    def copy(self, **kwargs):
+        return self._copy_helper(
             ('dtype', 'batch_size', 'shuffle', 'skip_incomplete',
              'random_state'),
             start=self.start, stop=self.stop, step=self.step,
@@ -1080,8 +1080,8 @@ class GeneratorFactoryDataStream(UserGeneratorDataStream):
         for batch in self._factory():
             yield self._validate_batch(batch)
 
-    def clone(self, **kwargs):
-        return self._clone_helper((), factory=self.factory, **kwargs)
+    def copy(self, **kwargs):
+        return self._copy_helper((), factory=self.factory, **kwargs)
 
 
 class GatherDataStream(DataStream):
@@ -1181,8 +1181,8 @@ class GatherDataStream(DataStream):
         for batches in zip(*self._streams):
             yield sum([tuple(b) for b in batches], ())
 
-    def clone(self, **kwargs):
-        return self._clone_helper(('random_state',), streams=self.streams, **kwargs)
+    def copy(self, **kwargs):
+        return self._copy_helper(('random_state',), streams=self.streams, **kwargs)
 
 
 class MapperDataStream(UserGeneratorDataStream):
@@ -1243,8 +1243,8 @@ class MapperDataStream(UserGeneratorDataStream):
             yield self._validate_batch(
                 self._mapper(*ensure_batch_is_tuple(batch)))
 
-    def clone(self, **kwargs):
-        return self._clone_helper(
+    def copy(self, **kwargs):
+        return self._copy_helper(
             ('batch_size', 'array_count', 'data_shapes', 'data_length',
              'random_state'),
             source=self._source,
@@ -1394,5 +1394,5 @@ class ThreadingDataStream(DataStream, AutoInitAndCloseable):
         finally:
             self._epoch_counter += 1
 
-    def clone(self, **kwargs):
-        return self._clone_helper(('prefetch',), source=self.source, **kwargs)
+    def copy(self, **kwargs):
+        return self._copy_helper(('prefetch',), source=self.source, **kwargs)

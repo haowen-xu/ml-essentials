@@ -3,6 +3,7 @@ import copy
 import inspect
 import json
 import os
+import re
 from argparse import Action, ArgumentParser
 from collections import OrderedDict, namedtuple
 from contextlib import contextmanager
@@ -139,7 +140,7 @@ class ConfigField(object):
             validator = get_validator(self)
             return validator.validate(os.environ[self.envvar])
         else:
-            return copy.deepcopy(self._default_value)
+            return deep_copy(self._default_value)
 
     @property
     def description(self) -> Optional[str]:
@@ -281,9 +282,9 @@ class Config(object):
                 elif isinstance(def_val, ConfigField):
                     val = def_val.get_default_value()
                 elif isinstance(def_val, Config):
-                    val = def_val.clone()
+                    val = def_val.copy()
                 else:
-                    val = copy.deepcopy(def_val)
+                    val = deep_copy(def_val)
 
                 setattr(self, key, val)
 
@@ -345,7 +346,7 @@ class Config(object):
     def __iter__(self):
         return (key for key in self.__dict__ if key in self)
 
-    def clone(self, **kwargs):
+    def copy(self, **kwargs):
         """
         Get a copy of a config object:
 
@@ -353,7 +354,7 @@ class Config(object):
         ...     nested = Config(c=789)
 
         >>> config = YourConfig(a=123, b=456)
-        >>> copied = config.clone(a=1230)
+        >>> copied = config.copy(a=1230)
         >>> isinstance(copied, YourConfig)
         True
         >>> copied.a
@@ -371,7 +372,7 @@ class Config(object):
         Returns:
             The copied config object.
         """
-        ret = copy.deepcopy(self)
+        ret = deep_copy(self)
         for key, val in kwargs.items():
             setattr(ret, key, val)
         return ret
@@ -410,7 +411,7 @@ class Config(object):
                 ret[key] = val.to_dict()
             else:
                 if deepcopy:
-                    val = copy.deepcopy(val)
+                    val = deep_copy(val)
                 ret[key] = val
         return ret
 
@@ -455,7 +456,7 @@ class Config(object):
                     flatten(val, f'{prefix}{key}.')
                 else:
                     if deepcopy:
-                        ret[f'{prefix}{key}'] = copy.deepcopy(val)
+                        ret[f'{prefix}{key}'] = deep_copy(val)
                     else:
                         ret[f'{prefix}{key}'] = val
         ret = {}
@@ -1021,6 +1022,35 @@ class ConfigLoader(Generic[TConfig]):
         parsed = {key: value for key, value in vars(namespace).items()
                   if value is not NOT_SET}
         self.load_object(parsed)
+
+
+TValue = TypeVar('TValue')
+PatternType = type(re.compile('x'))
+
+
+def deep_copy(value: TValue) -> TValue:
+    """
+    A patched deep copy function, that can handle various types cannot be
+    handled by the standard :func:`copy.deepcopy`.
+
+    Args:
+        value: The value to be copied.
+
+    Returns:
+        The copied value.
+    """
+    def pattern_dispatcher(v, memo=None):
+        return v  # we don't need to copy a regex pattern object, it's read-only
+
+    old_dispatcher = copy._deepcopy_dispatch.get(PatternType, None)
+    copy._deepcopy_dispatch[PatternType] = pattern_dispatcher
+    try:
+        return copy.deepcopy(value)
+    finally:
+        if old_dispatcher is not None:  # pragma: no cover
+            copy._deepcopy_dispatch[PatternType] = old_dispatcher
+        else:
+            del copy._deepcopy_dispatch[PatternType]
 
 
 class StrictDict(object):

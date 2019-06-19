@@ -1,5 +1,6 @@
 import codecs
 import os
+import re
 import shutil
 import unittest
 from tempfile import TemporaryDirectory
@@ -11,7 +12,7 @@ from mltk.config import (is_config_attribute, Config,
                          ConfigValidator, StrValidator, FloatValidator,
                          IntValidator, ConfigValidationError,
                          get_validator, ConfigLoader, FieldValidator,
-                         CustomValidator)
+                         CustomValidator, deep_copy)
 
 
 class ConfigTestCase(unittest.TestCase):
@@ -431,6 +432,22 @@ class ConfigLoaderTestCase(unittest.TestCase):
             MyConfig(nested1=MyConfig.nested1(a=1230), nested2=Nested2(b=4560),
                      nested3=Nested3(c=7890))
         )
+
+
+class DeepCopyTestCase(unittest.TestCase):
+
+    def test_deep_copy(self):
+        # test regex
+        pattern = re.compile(r'xyz')
+        self.assertIs(deep_copy(pattern), pattern)
+
+        # test list of regex
+        v = [pattern, pattern]
+        o = deep_copy(v)
+        self.assertIsNot(v, o)
+        self.assertEqual(v, o)
+        self.assertIs(v[0], o[0])
+        self.assertIs(o[1], o[0])
 
 
 class ValidatorTestCase(unittest.TestCase):

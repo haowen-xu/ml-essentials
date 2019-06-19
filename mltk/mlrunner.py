@@ -1,6 +1,5 @@
 # -*- coding: utf-8 -*-
 import codecs
-import copy
 import logging
 import os
 import re
@@ -21,9 +20,10 @@ from typing import *
 
 import click
 
-from .config import Config, ConfigLoader
+from .config import Config, ConfigLoader, deep_copy
 from .events import EventHost, Event
-from .mlstorage import DocumentType, MLStorageClient, IdType, json_loads
+from .mlstorage import DocumentType, MLStorageClient, IdType, json_loads, \
+    normalize_relpath
 from .utils import exec_proc
 
 __all__ = ['MLRunnerConfig', 'MLRunner']
@@ -76,27 +76,29 @@ class MLRunnerConfig(Config):
     quiet: bool = False
 
     class source(Config):
-        root: str = '.'
-        clone_dir: bool = False
+        src_dir: str = '.'
+        dst_dir: str = ''
+
+        clone: bool = False
         cleanup: bool = True
         pack_zip: bool = True
         source_zip_file: str = 'source.zip'
 
         includes = [
-            re.compile(r'.*\.(py|pl|rb|js|sh|r|bat|cmd|exe|jar)$', re.I)
+            re.compile(r'.*\.(py|pl|rb|js|sh|r|bat|cmd|exe|jar)$')
         ]
         excludes = [
             re.compile(
                 r'.*[\\/](node_modules|\.svn|\.cvs|\.idea|'
-                r'\.DS_Store|\.git|\.hg|\.pytest_cache|__pycache__)$',
-                re.I
+                r'\.DS_Store|\.git|\.hg|\.pytest_cache|__pycache__)'
+                r'(?:$|[\\/].*)'
             )
         ]
 
         def user_validate(self):
             def maybe_compile(p):
                 if not hasattr(p, 'match'):
-                    p = re.compile(p, re.I)
+                    p = re.compile(p)
                 return p
 
             if self.includes:
@@ -112,14 +114,15 @@ class MLRunnerConfig(Config):
     class integration(Config):
         parse_stdout: bool = True
 
-        log_file: str = 'console.log'
-        daemon_log_file: str = 'daemon.log'
-        runner_log_file: str = 'mlrun.log'
-
         config_file: str = 'config.json'
         default_config_file: str = 'config.defaults.json'
         result_file: str = 'result.json'
         webui_file: str = 'webui.json'
+
+    class logging(Config):
+        log_file: str = 'console.log'
+        daemon_log_file: str = 'daemon.log'
+        runner_log_file: str = 'mlrun.log'
 
     def user_validate(self):
         if self.server is None:
@@ -206,7 +209,8 @@ class MLRunner(object):
             'MLRUNNER_OUTPUT_DIR': output_dir,
             'MLSTORAGE_SERVER': self.config.server,
         })
-        update_env(env, self.config.env.to_flatten_dict())
+        if self.config.env is not None:
+            update_env(env, self.config.env.to_flatten_dict())
 
         # set "CUDA_VISIBLE_DEVICES" according to gpu settings
         if self.config.gpu:
@@ -260,7 +264,7 @@ class MLRunner(object):
             def format_value(v):
                 if isinstance(v, (tuple, list)):
                     if v[1] is not None:
-                        return f'{v[0]} ± {v[1]}'
+                        return f'{v[0]}±{v[1]}'
                     else:
                         return v[0]
                 else:
@@ -335,7 +339,7 @@ class MLRunner(object):
         })
 
         # create the program host for the main process
-        log_file = os.path.join(output_dir, self.config.integration.log_file)
+        log_file = os.path.join(output_dir, self.config.logging.log_file)
         main_proc = ProgramHost(
             args=self.config.args,
             env=env,
@@ -350,7 +354,7 @@ class MLRunner(object):
         daemons = []
         if self.config.daemon:
             for i, daemon in enumerate(self.config.daemon):
-                a, b = os.path.splitext(self.config.integration.daemon_log_file)
+                a, b = os.path.splitext(self.config.logging.daemon_log_file)
                 log_file = os.path.join(output_dir, f'{a}.{i}{b}')
                 daemons.append(ProgramHost(
                     args=daemon,
@@ -367,8 +371,8 @@ class MLRunner(object):
             self._copy_dir(self._clone_doc['storage_dir'], output_dir)
 
         source_copier = SourceCopier(
-            source_dir='.',
-            dest_dir=output_dir,
+            source_dir=self.config.source.src_dir,
+            dest_dir=os.path.join(output_dir, self.config.source.dst_dir),
             includes=self.config.source.includes,
             excludes=self.config.source.excludes
         )
@@ -388,7 +392,9 @@ class MLRunner(object):
         # now execute the processes
         with ExitStack() as ctx_stack:
             # populate the work directory with source files
-            if self.config.source.clone_dir:
+            source_copier.copy_args_files(self.config.args)
+
+            if self.config.source.clone:
                 ctx_stack.enter_context(source_copier)
                 getLogger(__name__).info(
                     'Cloned source files to work directory.')
@@ -399,6 +405,9 @@ class MLRunner(object):
                 source_copier.pack_zip(source_zip_file)
                 getLogger(__name__).info(
                     'Created source file archive: %s', source_zip_file)
+
+            # add a temporary file cleaner
+            ctx_stack.enter_context(TemporaryFileCleaner(output_dir))
 
             # start the background json watcher
             ctx_stack.enter_context(json_watcher)
@@ -463,7 +472,7 @@ class MLRunner(object):
 
             # prepare for the work dir
             runner_log_file = os.path.join(
-                output_dir, self.config.integration.runner_log_file)
+                output_dir, self.config.logging.runner_log_file)
 
             with configure_logger(runner_log_file):
                 try:
@@ -534,7 +543,7 @@ class MLRunner(object):
                    'The CLI arguments will override all config files.')
 @click.option('-e', '--env', required=False, multiple=True,
               help='Environmental variable (FOO=BAR).')
-@click.option('--gpu', required=False, multiple=True,
+@click.option('-g', '--gpu', required=False, multiple=True,
               help='Quick approach to set the "CUDA_VISIBLE_DEVICES" '
                    'environmental variable.')
 @click.option('-s', '--server', required=False,
@@ -558,7 +567,7 @@ class MLRunner(object):
               help='Specify the shell command to execute. '
                    'Will override the program arguments (args).')
 @click.argument('args', nargs=-1)
-def mlrun(name, description, tags, config_file, env, gpu, server, clone_source,
+def mlrun(name, description, tags, config_file, env, gpu, server, clone,
           pack_zip, daemon, command, args):
     """
     Run an experiment.
@@ -660,7 +669,7 @@ def mlrun(name, description, tags, config_file, env, gpu, server, clone_source,
         'env': env_dict,
         'gpu': gpu_list,
         'server': server,
-        'source.clone_dir': clone_source,
+        'source.clone': clone,
         'source.pack_zip': pack_zip,
         'daemon': daemon,
         'args': command or args,
@@ -817,7 +826,7 @@ class StdoutParser(object):
     {'TensorBoard': 'http://127.0.0.1:62462'}
     >>> parser.parse_line(b'Serving HTTP on 0.0.0.0 port 8000 '
     ...                   b'(http://0.0.0.0:8000/) ...')
-    {'Python HTTP Server': 'http://0.0.0.0:8000/'}
+    {'SimpleHTTP': 'http://0.0.0.0:8000/'}
 
     >>> parser.parse_line(b'no pattern exist')
 
@@ -861,13 +870,8 @@ class StdoutParser(object):
         # pattern for parsing tensorboard log
         self._webui_pattern = re.compile(
             rb'(?:^TensorBoard \S+ at (?P<TensorBoard>\S+))|'
-            rb'(?:^Serving HTTP on \S+ port \d+ \((?P<PythonHTTP>[^()]+)\))',
-            re.I
+            rb'(?:^Serving HTTP on \S+ port \d+ \((?P<SimpleHTTP>[^()]+)\))'
         )
-        self._webui_keys = {
-            'TensorBoard': 'TensorBoard',
-            'PythonHTTP': 'Python HTTP Server',
-        }
 
     @property
     def max_parse_length(self):
@@ -955,9 +959,9 @@ class StdoutParser(object):
         m = self._webui_pattern.match(line)
         if m:
             g = m.groupdict()
-            for key, val in self._webui_keys.items():
-                if g[key] is not None:
-                    self.on_webui_log.fire({val: g[key].decode('utf-8')})
+            for key, val in g.items():
+                if val is not None:
+                    self.on_webui_log.fire({key: val.decode('utf-8')})
             return
 
     def parse(self, content: bytes):
@@ -1178,7 +1182,7 @@ class ExperimentDoc(object):
     def merge_doc_updates(self) -> DocumentType:
         """Merge the pending updates into the document locally."""
         with self._update_lock:
-            doc = copy.deepcopy(self._value)
+            doc = deep_copy(self._value)
             updates = self._updates
             if updates:
                 for key, val in updates.items():
@@ -1349,8 +1353,8 @@ class SourceCopier(object):
             includes: Path patterns to include.
             excludes: Path patterns to exclude.
         """
-        self._source_dir = source_dir
-        self._dest_dir = dest_dir
+        self._source_dir = os.path.normpath(os.path.abspath(source_dir))
+        self._dest_dir = os.path.abspath(dest_dir)
         self._includes = includes
         self._excludes = excludes
         self._created_dirs = []
@@ -1377,6 +1381,38 @@ class SourceCopier(object):
                         file_callback(src_path, dst_path)
 
         walk(self._source_dir, '')
+
+    def copy_args_files(self, args: Union[str, List[str]]):
+        """
+        Copy the source files specified in `args` to `dest_dir`.
+
+        Args:
+            args: The CLI arguments.
+
+        Notes:
+            Files copied by this method will not be deleted in :meth:`cleanup()`
+        """
+        if isinstance(args, (str, bytes)):
+            args = shlex.split(str(args))
+
+        for arg in args:
+            arg_path = os.path.normpath(
+                os.path.abspath(os.path.join(self._source_dir, arg)))
+
+            if os.path.isfile(arg_path) and \
+                    any(p.match(arg_path) for p in self._includes) and \
+                    not any(p.match(arg_path) for p in self._excludes):
+                try:
+                    arg_relpath = normalize_relpath(
+                        os.path.relpath(arg_path, self._source_dir))
+                except ValueError:
+                    pass  # not a file in `source_dir`
+                else:
+                    dst_path = os.path.join(self._dest_dir, arg_relpath)
+                    dst_dir = os.path.dirname(dst_path)
+                    if not os.path.isdir(dst_dir):
+                        os.makedirs(dst_dir, exist_ok=True)
+                    shutil.copyfile(arg_path, dst_path)
 
     def pack_zip(self, zip_path):
         """
@@ -1407,8 +1443,9 @@ class SourceCopier(object):
 
         def _copy_file(src, relpath):
             path = os.path.join(self._dest_dir, relpath)
-            self._copied_files.append(path)
-            shutil.copyfile(src, path)
+            if not os.path.exists(path):  # do not override existing file
+                self._copied_files.append(path)
+                shutil.copyfile(src, path)
 
         self._walk(_create_dir, _copy_file)
 
@@ -1443,6 +1480,86 @@ class SourceCopier(object):
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.cleanup_dir()
+
+
+class TemporaryFileCleaner(object):
+    """
+    Class to cleanup some common temporary files generated by the experiment
+    program, e.g., "*.pyc".
+    """
+
+    TEMP_FILE_PATTERNS = (
+        re.compile(r'.*\.(pyc|)$'),
+        re.compile(r'.*[\\/](Thumbs\.db|\.DS_Store)$'),
+    )
+    TEMP_DIR_PATTERNS = (
+        re.compile(r'.*[\\/](__pycache__)(?:$|[\\/].*)'),
+    )
+    EXCLUDE_PATTERNS = (
+        re.compile(
+            r'.*[\\/](\.svn|\.cvs|\.idea|\.git|\.hg)'
+            r'(?:$|[\\/].*)'
+        ),
+    )
+
+    def __init__(self,
+                 root_dir: str,
+                 file_patterns: Iterable[PatternType] = TEMP_FILE_PATTERNS,
+                 dir_patterns: Iterable[PatternType] = TEMP_DIR_PATTERNS,
+                 exclude_patterns: Iterable[PatternType] = EXCLUDE_PATTERNS):
+        """
+        Construct a new :class:`TemporaryFileCleaner`.
+
+        Args:
+            root_dir: The root directory.
+            file_patterns: The temporary file patterns.
+            dir_patterns: The temporary directory patterns.  Only empty
+                temporary directories will be removed.
+            exclude_patterns: The file and directory patterns to skip.
+        """
+        self._root_dir = os.path.abspath(root_dir)
+        self._file_patterns = tuple(file_patterns)
+        self._dir_patterns = tuple(dir_patterns)
+        self._exclude_patterns = tuple(exclude_patterns)
+
+    @property
+    def root_dir(self):
+        return self._root_dir
+
+    def _cleanup_dir(self, path):
+        for name in os.listdir(path):
+            f_path = os.path.join(path, name)
+
+            try:
+                if any(p.match(f_path) for p in self._exclude_patterns):
+                    # excluded, skip
+                    continue
+
+                if os.path.isdir(f_path):
+                    # cleanup the directory
+                    self._cleanup_dir(f_path)
+                    if any(p.match(f_path) for p in self._dir_patterns) and \
+                            len(os.listdir(f_path)) == 0:
+                        os.rmdir(f_path)  # remove it if matched dir pattern
+                else:
+                    # cleanup the file
+                    if any(p.match(f_path) for p in self._file_patterns):
+                        os.remove(f_path)
+            except Exception as ex:
+                getLogger(__name__).warning('Failed to cleanup: %s', f_path)
+
+    def cleanup(self):
+        try:
+            if os.path.isdir(self.root_dir):
+                self._cleanup_dir(self.root_dir)
+        except Exception as ex:
+            getLogger(__name__).warning('Failed to cleanup: %s', self.root_dir)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.cleanup()
 
 
 class JsonFileWatcher(object):

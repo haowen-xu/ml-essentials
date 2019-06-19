@@ -151,15 +151,15 @@ class ArraysDataStreamTestCase(unittest.TestCase):
         np.testing.assert_equal(arrays[0], x[indices[:3]])
         np.testing.assert_equal(arrays[1], y[indices[:3]])
 
-    def test_clone(self):
+    def test_copy(self):
         x = np.random.normal(size=[5, 4])
         y = np.random.normal(size=[5, 2, 3])
         rs = np.random.RandomState(1234)
         stream = ArraysDataStream([x, y], batch_size=3, shuffle=False,
                                   skip_incomplete=False)
 
-        stream2 = stream.clone(batch_size=4, shuffle=True, skip_incomplete=True,
-                               random_state=rs)
+        stream2 = stream.copy(batch_size=4, shuffle=True, skip_incomplete=True,
+                              random_state=rs)
         self.assertIsInstance(stream2, ArraysDataStream)
         self.assertEqual(stream2.batch_size, 4)
         self.assertTrue(stream2.shuffle)
@@ -211,11 +211,11 @@ class IntSeqDataStreamTestCase(unittest.TestCase):
         ans = ans[:3]
         np.testing.assert_equal(stream.get_arrays()[0], ans)
 
-    def test_clone(self):
+    def test_copy(self):
         rs = np.random.RandomState(1234)
         stream = IntSeqDataStream(5, dtype=np.int32, batch_size=3)
-        stream2 = stream.clone(dtype=np.int64, batch_size=4, shuffle=True,
-                               skip_incomplete=True, random_state=rs)
+        stream2 = stream.copy(dtype=np.int64, batch_size=4, shuffle=True,
+                              skip_incomplete=True, random_state=rs)
         self.assertIsInstance(stream2, IntSeqDataStream)
         self.assertEqual(stream2.dtype, np.int64)
         self.assertEqual(stream2.batch_size, 4)
@@ -271,7 +271,7 @@ class UserGeneratorDataStreamTestCase(unittest.TestCase):
 
 class GeneratorFactoryDataStreamTestCase(unittest.TestCase):
 
-    def test_stream_and_clone(self):
+    def test_stream_and_copy(self):
         def g():
             for i in range(3):
                 yield np.arange(i * 3, (i + 1) * 3, dtype=np.int32)
@@ -283,7 +283,7 @@ class GeneratorFactoryDataStreamTestCase(unittest.TestCase):
                      'random_state'):
             self.assertIsNone(getattr(stream, attr))
 
-        stream2 = stream.clone()
+        stream2 = stream.copy()
         self.assertIsNot(stream2, stream)
         self.assertIsInstance(stream2, GeneratorFactoryDataStream)
 
@@ -380,9 +380,9 @@ class GatherDataStreamTestCase(unittest.TestCase):
         stream = GatherDataStream([stream_x, stream_yz], random_state=rs2)
         self.assertIs(stream.random_state, rs2)
 
-        # test clone with overrided random state
+        # test copy with overrided random state
         rs3 = np.random.RandomState(1234)
-        stream2 = stream.clone(random_state=rs3)
+        stream2 = stream.copy(random_state=rs3)
         self.assertIsInstance(stream2, GatherDataStream)
         self.assertIs(stream2.random_state, rs3)
 
@@ -438,12 +438,12 @@ class MapperDataStreamTestCase(unittest.TestCase):
         self.assertEqual(mapped.data_shapes, ((3,),))
         self.assertIs(mapped.random_state, rs2)
 
-    def test_clone(self):
+    def test_copy(self):
         rs = np.random.RandomState()
         source = DataStream.int_seq(5, batch_size=3)
 
         mapped = MapperDataStream(source, lambda *args: args)
-        mapped2 = mapped.clone(
+        mapped2 = mapped.copy(
             batch_size=7,
             array_count=1,
             data_shapes=((3,),),
@@ -641,13 +641,13 @@ class ThreadingDataStreamTestCase(unittest.TestCase):
         # should be able to recover from the error in previous loop
         f()
 
-    def test_clone(self):
+    def test_copy(self):
         source = DataStream.int_seq(5, batch_size=3)
         stream = source.threaded(3)
         self.assertIs(stream.source, source)
         self.assertEqual(stream.prefetch, 3)
 
-        stream2 = stream.clone(prefetch=1)
+        stream2 = stream.copy(prefetch=1)
         self.assertIsInstance(stream2, ThreadingDataStream)
         self.assertIs(stream2.source, source)
         self.assertEqual(stream2.prefetch, 1)

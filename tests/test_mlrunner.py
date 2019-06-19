@@ -9,7 +9,7 @@ import pytest
 
 from mltk import Config, ConfigValidationError
 from mltk.mlrunner import ProgramHost, StdoutParser, MLRunnerConfig, \
-    SourceCopier, MLRunnerConfigLoader
+    SourceCopier, MLRunnerConfigLoader, TemporaryFileCleaner
 
 
 def get_file_content(path):
@@ -152,8 +152,8 @@ class MLRunnerConfigLoaderTestCase(unittest.TestCase):
                     }
                 },
                 'config1.yml': b'resume_from: zyx\n'
-                               b'source.root: config1',
-                'config2.yml': b'source.root: config2\n'
+                               b'source.src_dir: config1',
+                'config2.yml': b'source.src_dir: config2\n'
                                b'integration.log_file: config2.log',
             })
 
@@ -189,7 +189,7 @@ class MLRunnerConfigLoaderTestCase(unittest.TestCase):
 
             config = loader.get()
             self.assertEqual(config.integration.log_file, 'config2.log')
-            self.assertEqual(config.source.root, 'config2')
+            self.assertEqual(config.source.src_dir, 'config2')
             self.assertEqual(config.resume_from, 'zyx')
             self.assertEqual(config.description, 'work/nested/.mlrun.yml')
             self.assertListEqual(config.tags, ['4', '5', '6'])
@@ -486,11 +486,14 @@ class SourceCopierTestCase(unittest.TestCase):
                         'e.sh': b'e.sh'
                     },
                     'f.sh': b'f.sh',
-                }
+                },
+                'override.py': b'source'
             })
 
             # test copy source
             dest_dir = os.path.join(temp_dir, 'dst')
+            prepare_dir(dest_dir, {'override.py': b'dest'})
+
             copier = SourceCopier(source_dir, dest_dir, includes, excludes)
             copier.clone_dir()
             dest_content = dir_snapshot(dest_dir)
@@ -504,7 +507,8 @@ class SourceCopierTestCase(unittest.TestCase):
                         'e.sh': b'e.sh'
                     },
                     'f.sh': b'f.sh',
-                }
+                },
+                'override.py': b'dest'
             }
             self.assertDictEqual(dest_content, dest_expected)
 
@@ -512,6 +516,7 @@ class SourceCopierTestCase(unittest.TestCase):
             zip_file = os.path.join(temp_dir, 'source.zip')
             copier.pack_zip(zip_file)
             zip_content = zip_snapshot(zip_file)
+            dest_expected['override.py'] = b'source'
             self.assertDictEqual(zip_content, dest_expected)
 
             # test cleanup
@@ -524,8 +529,105 @@ class SourceCopierTestCase(unittest.TestCase):
             self.assertDictEqual(dest_content, {
                 'dir': {
                     'more.txt': b'more.txt'
+                },
+                'override.py': b'dest'
+            })
+
+    def test_copy_args_files(self):
+        with TemporaryDirectory() as temp_dir:
+            src = os.path.join(temp_dir, 'src')
+            dst1 = os.path.join(temp_dir, 'dst1')
+            dst2 = os.path.join(temp_dir, 'dst2')
+            prepare_dir(temp_dir, {'e.sh': b'e.sh'})
+
+            # prepare for the source dir
+            prepare_dir(src, {
+                'a.py': b'a.py',
+                'a.sh': b'a.sh',
+                'a.txt': b'a.txt',
+                'nested': {
+                    'b.sh': b'b.sh',
+                    'b.py': b'b.py',
+                },
+                '.git': {
+                    'c.py': b'c.py'
+                },
+            })
+
+            # test copy according to command line
+            copier = SourceCopier(src, dst1, MLRunnerConfig.source.includes,
+                                  MLRunnerConfig.source.excludes)
+            copier.copy_args_files(
+                'python a.py a.txt nested/b.py ./nested/../nested/b.sh '
+                '.git/c.py d.sh ../e.sh'
+            )
+            self.assertDictEqual(dir_snapshot(dst1), {
+                'a.py': b'a.py',
+                'nested': {
+                    'b.sh': b'b.sh',
+                    'b.py': b'b.py',
                 }
             })
+
+            # test copy according to args
+            copier = SourceCopier(src, dst2, MLRunnerConfig.source.includes,
+                                  MLRunnerConfig.source.excludes)
+            copier.copy_args_files(
+                'python a.py a.txt nested/b.py ./nested/../nested/b.sh '
+                '.git/c.py d.sh ../e.sh'.split(' ')
+            )
+            self.assertDictEqual(dir_snapshot(dst2), {
+                'a.py': b'a.py',
+                'nested': {
+                    'b.sh': b'b.sh',
+                    'b.py': b'b.py',
+                }
+            })
+
+
+class TemporaryFileCleanerTestCase(unittest.TestCase):
+
+    maxDiff = None
+
+    def test_cleanup(self):
+        with TemporaryDirectory() as temp_dir:
+            prepare_dir(temp_dir, {
+                '.git': {
+                    'a.pyc': b'a.pyc'
+                },
+                '__pycache__': {
+                    'b.pyc': b'b.pyc',
+                    'g.txt': b'g.txt',
+                },
+                'nested': {
+                    '__pycache__': {
+                        'c.pyc': b'c.pyc',
+                        'd.pyc': b'd.pyc',
+                        'Thumbs.db': b'Thumbs.db',
+                        '.DS_Store': b'.DS_Store',
+                    },
+                    'e.pyc': b'e.pyc',
+                },
+                'h.DS_Store': b'h.DS_Store'
+            })
+
+            cleaner = TemporaryFileCleaner(temp_dir)
+            cleaner.cleanup()
+
+            self.assertDictEqual(dir_snapshot(temp_dir), {
+                '.git': {
+                    'a.pyc': b'a.pyc',
+                },
+                '__pycache__': {
+                    'g.txt': b'g.txt',
+                },
+                'nested': {},
+                'h.DS_Store': b'h.DS_Store'
+            })
+
+            # test cleanup non-exist directory
+            cleaner = TemporaryFileCleaner(os.path.join(temp_dir, 'non-exist'))
+            cleaner.cleanup()
 
 
 class JsonFileWatcherTestCase(unittest.TestCase):
