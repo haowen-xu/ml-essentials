@@ -21,7 +21,7 @@ TupleOfShapes = Tuple[Tuple[int, ...], ...]
 IterableOfArrays = Iterable[ArrayType]
 ListOfArrays = Iterable[ArrayType]
 RandomStateType = np.random.RandomState
-TReturn = TypeVar('TElement')
+TReturn = TypeVar('TReturn')
 TMapper = Callable[..., Union[ArrayType, IterableOfArrays, ListOfArrays]]
 TGeneratorFactory = Callable[[], Generator[IterableOfArrays, None, None]]
 

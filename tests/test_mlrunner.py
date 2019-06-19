@@ -9,7 +9,7 @@ import pytest
 
 from mltk import Config, ConfigValidationError
 from mltk.mlrunner import ProgramHost, StdoutParser, MLRunnerConfig, \
-    SourceCopier
+    SourceCopier, MLRunnerConfigLoader
 
 
 def get_file_content(path):
@@ -32,8 +32,7 @@ class MLRunnerConfigTestCase(unittest.TestCase):
         config.server = 'http://127.0.0.1:8080'
 
         with pytest.raises(ConfigValidationError,
-                           match='\'MLRunnerConfig\' object has no attribute '
-                                 '\'args\''):
+                           match='`args` is required.'):
             _ = config.validate()
 
         config.args = ''
@@ -122,6 +121,99 @@ class MLRunnerConfigTestCase(unittest.TestCase):
         self.assertEqual(len(c.source.excludes), 2)
         self.assertEqual(c.source.excludes[0].pattern, excludes[0])
         self.assertIs(c.source.excludes[1], excludes[1])
+
+
+class MLRunnerConfigLoaderTestCase(unittest.TestCase):
+
+    maxDiff = None
+
+    def test_loader(self):
+        with TemporaryDirectory() as temp_dir:
+            # prepare for the test dir
+            prepare_dir(temp_dir, {
+                'sys1': {
+                    '.mlrun.yaml': b'clone_from: sys1\n'
+                                   b'args: sys1/.mlrun.yaml args\n'
+                },
+                'sys2': {
+                    '.mlrun.yml': b'args: sys2/.mlrun.yml args\n'
+                                  b'name: sys2/.mlrun.yml',
+                },
+                'work': {
+                    '.mlrun.yml': b'name: work/.mlrun.yml\n'
+                                  b'server: http://127.0.0.1:8080',
+                    '.mlrun.yaml': b'server: http://127.0.0.1:8081\n'
+                                   b'tags: [1, 2, 3]',
+                    '.mlrun.json': b'{"tags": [4, 5, 6],'
+                                   b'"description": "work/.mlrun.json"}',
+                    'nested': {
+                        '.mlrun.yml': b'description: work/nested/.mlrun.yml\n'
+                                      b'resume_from: xyz'
+                    }
+                },
+                'config1.yml': b'resume_from: zyx\n'
+                               b'source.root: config1',
+                'config2.yml': b'source.root: config2\n'
+                               b'integration.log_file: config2.log',
+            })
+
+            # test loader
+            config = MLRunnerConfig(env={'a': '1'}, clone_from='code')
+            loader = MLRunnerConfigLoader(
+                config=config,
+                config_files=[
+                    os.path.join(temp_dir, 'config1.yml'),
+                    os.path.join(temp_dir, 'config2.yml')
+                ],
+                work_dir=os.path.join(temp_dir, 'work/nested'),
+                system_paths=[
+                    os.path.join(temp_dir, 'sys1'),
+                    os.path.join(temp_dir, 'sys2')
+                ],
+            )
+            expected_config_files = [
+                os.path.join(temp_dir, 'sys1/.mlrun.yaml'),
+                os.path.join(temp_dir, 'sys2/.mlrun.yml'),
+                os.path.join(temp_dir, 'work/.mlrun.yml'),
+                os.path.join(temp_dir, 'work/.mlrun.yaml'),
+                os.path.join(temp_dir, 'work/.mlrun.json'),
+                os.path.join(temp_dir, 'work/nested/.mlrun.yml'),
+                os.path.join(temp_dir, 'config1.yml'),
+                os.path.join(temp_dir, 'config2.yml'),
+            ]
+            self.assertListEqual(
+                loader.list_config_files(), expected_config_files)
+            load_order = []
+            loader.load_config_files(on_load=load_order.append)
+            self.assertListEqual(load_order, expected_config_files)
+
+            config = loader.get()
+            self.assertEqual(config.integration.log_file, 'config2.log')
+            self.assertEqual(config.source.root, 'config2')
+            self.assertEqual(config.resume_from, 'zyx')
+            self.assertEqual(config.description, 'work/nested/.mlrun.yml')
+            self.assertListEqual(config.tags, ['4', '5', '6'])
+            self.assertEqual(config.server, 'http://127.0.0.1:8081')
+            self.assertEqual(config.name, 'work/.mlrun.yml')
+            self.assertEqual(config.args, 'sys2/.mlrun.yml args')
+            self.assertEqual(config.clone_from, 'sys1')
+            self.assertEqual(config.env, Config(a='1'))
+
+            # test bare loader
+            loader = MLRunnerConfigLoader(system_paths=[])
+            self.assertListEqual(loader.list_config_files(), [])
+            loader.load_config_files()
+
+            # test just one config file
+            cfg_file = os.path.join(temp_dir, 'config.json')
+            write_file_content(cfg_file, b'{"args": "exit 0",'
+                                         b'"server":"http://127.0.0.1:8080"}')
+            loader = MLRunnerConfigLoader(config_files=[cfg_file])
+            loader.load_config_files()
+            self.assertEqual(loader.get(), MLRunnerConfig(
+                server='http://127.0.0.1:8080',
+                args='exit 0'
+            ))
 
 
 class StdoutParserTestCase(unittest.TestCase):
@@ -337,8 +429,7 @@ def dir_snapshot(path):
 
 
 def prepare_dir(path, snapshot):
-    assert(not os.path.isdir(path))
-    os.makedirs(path)
+    os.makedirs(path, exist_ok=True)
 
     for name, value in snapshot.items():
         f_path = os.path.join(path, name)
@@ -435,3 +526,9 @@ class SourceCopierTestCase(unittest.TestCase):
                     'more.txt': b'more.txt'
                 }
             })
+
+
+class JsonFileWatcherTestCase(unittest.TestCase):
+
+    def test_watcher(self):
+        pass

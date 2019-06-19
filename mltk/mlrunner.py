@@ -14,7 +14,7 @@ import time
 import traceback
 import zipfile
 from contextlib import contextmanager, ExitStack
-from logging import getLogger, FileHandler, StreamHandler
+from logging import getLogger, FileHandler
 from threading import RLock, Condition, Thread
 from typing import *
 
@@ -64,7 +64,7 @@ class MLRunnerConfig(Config):
     resume_from: str = None
     clone_from: str = None
 
-    args: Union[str, List[str]]
+    args: Union[str, List[str]] = None
     daemon: List[List[str]] = None
     work_dir: str = None
     env: Config = None
@@ -122,7 +122,9 @@ class MLRunnerConfig(Config):
         if self.server is None:
             raise ValueError('`server` is required.')
 
-        if not isinstance(self.args, (str, bytes)):
+        if self.args is None:
+            raise ValueError('`args` is required.')
+        elif not isinstance(self.args, (str, bytes)):
             self.args = list(map(str, self.args))
         else:
             self.args = str(self.args)
@@ -515,36 +517,6 @@ class MLRunner(object):
         return exit_code
 
 
-def discover_default_mlrunner_config_files():
-    def uniquify(seq):
-        ret = []
-        for v in seq:
-            if v not in ret:
-                ret.append(v)
-        return ret
-
-    default_config_file_names = [
-        '.mlrun.yml', '.mlrun.yaml', '.mlrun.json',
-    ]
-    default_config_file_locations = [
-        os.path.expanduser('~'),
-        os.path.abspath('.'),
-    ]
-    while True:
-        parent_dir = os.path.dirname(default_config_file_locations[-1])
-        if parent_dir != default_config_file_locations[-1]:
-            default_config_file_locations.append(parent_dir)
-        else:
-            break
-    default_config_file_locations = uniquify(default_config_file_locations)
-
-    for location in default_config_file_locations:
-        for file_name in default_config_file_names:
-            path = os.path.join(location, file_name)
-            if os.path.isfile(path):
-                yield path
-
-
 @click.command()
 @click.option('-n', '--name', required=False, default=None,
               help='Experiment name.')
@@ -650,18 +622,13 @@ def mlrun(name, description, tags, config_file, env, gpu, server, clone_source,
     from the MLStorage output directory.
     """
     logging.basicConfig(level='INFO', format=LOG_FORMAT)
-    config_loader = ConfigLoader(MLRunnerConfig)
 
-    # load the runner configuration from default config files
-    for path in discover_default_mlrunner_config_files():
-        getLogger(__name__).info('Load runner configuration from: %s', path)
-        config_loader.load_file(path)
-
-    # load the runner configuration from specified onfig files
-    if config_file:
-        for path in config_file:
-            getLogger(__name__).info('Load runner configuration from: %s', path)
-            config_loader.load_file(path)
+    # load configuration from files
+    config_loader = MLRunnerConfigLoader(config_files=config_file)
+    config_loader.load_config_files(
+        lambda path: getLogger(__name__).info(
+            'Load runner configuration from: %s', path)
+    )
 
     # parse the CLI arguments
     if env:
@@ -720,7 +687,6 @@ def configure_logger(log_file: str):
         log_file: Path of the log file.
     """
     logger = getLogger(__name__)
-    propagate = logger.propagate
     level = logger.level
     fmt = logging.Formatter(LOG_FORMAT)
 
@@ -728,22 +694,104 @@ def configure_logger(log_file: str):
     f_handler.setLevel(LOG_LEVEL)
     f_handler.setFormatter(fmt)
 
-    c_handler = StreamHandler(sys.stdout)
-    c_handler.setLevel(LOG_LEVEL)
-    c_handler.setFormatter(fmt)
-
     try:
         logger.addHandler(f_handler)
-        logger.addHandler(c_handler)
-        logger.propagate = False
         logger.level = getattr(logging, LOG_LEVEL)
         yield
     finally:
         logger.removeHandler(f_handler)
-        logger.removeHandler(c_handler)
-        logger.propagate = propagate
         logger.level = level
         f_handler.close()
+
+
+class MLRunnerConfigLoader(ConfigLoader[MLRunnerConfig]):
+    """
+    The config loader for :class:`MLRunnerConfig`.
+    """
+
+    def __init__(self,
+                 config: Optional[MLRunnerConfig] = None,
+                 config_files: Optional[Iterable[str]] = None,
+                 work_dir: Optional[str] = None,
+                 system_paths: Iterable[str] = (os.path.expanduser('~'),),
+                 file_names: Iterable[str] = ('.mlrun.yml', '.mlrun.yaml',
+                                              '.mlrun.json')):
+        """
+        Construct a new :class:`MLRunnerConfigLoader`.
+
+        Args:
+            config: The partial config object.
+            config_files: User specified config files to load.
+            work_dir: The work directory.  If specified, from the work
+                directory, and from its all parents, config files will be
+                searched.
+            system_paths: The system paths, from where to search config files.
+        """
+        if config is None:
+            config = MLRunnerConfig()
+        if config_files is not None:
+            config_files = tuple(map(str, config_files))
+        if work_dir is not None:
+            work_dir = os.path.abspath(work_dir)
+        system_paths = tuple(map(os.path.abspath, system_paths))
+        file_names = tuple(map(str, file_names))
+
+        super().__init__(config, validate_all=True)
+        self._user_config_files = config_files
+        self._work_dir = work_dir
+        self._system_paths = system_paths
+        self._file_names = file_names
+
+    def list_config_files(self) -> List[str]:
+        """
+        List all existing config files from search paths.
+
+        The config files are ordered in ASCENDING priority, that is, you
+        may use a :class:`MLRunnerConfigLoader` to load them in order.
+        """
+        files = []
+
+        def try_add(f_path):
+            if os.path.isfile(f_path) and f_path not in files:
+                files.append(f_path)
+
+        # check the user files
+        if self._user_config_files:
+            for f_path in reversed(self._user_config_files):
+                try_add(f_path)
+
+        # check the work directory
+        if self._work_dir:
+            work_dir = self._work_dir
+            while True:
+                for name in reversed(self._file_names):
+                    try_add(os.path.join(work_dir, name))
+                parent_dir = os.path.dirname(work_dir)
+                if parent_dir == work_dir:
+                    break
+                work_dir = parent_dir
+
+        # search for the system paths
+        for path in reversed(self._system_paths):
+            for name in reversed(self._file_names):
+                try_add(os.path.join(path, name))
+
+        # now compose the final list
+        files.reverse()
+        return files
+
+    def load_config_files(self,
+                          on_load: Optional[Callable[[str], None]] = None):
+        """
+        Load all config files returned by :meth:`list_config_files()`.
+
+        Args:
+            on_load: Callback function when a config file is being loaded.
+        """
+        for config_file in self.list_config_files():
+            if on_load is not None:
+                on_load(config_file)
+            self.load_file(config_file)
 
 
 class StdoutParser(object):
