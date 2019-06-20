@@ -50,7 +50,7 @@ class ExcProcTestCase(unittest.TestCase):
             stdout = io.BytesIO()
             with exec_proc(args, on_stdout=stdout.write, cwd=tempdir) as proc:
                 proc.wait()
-            self.assertEquals(123, proc.poll())
+            self.assertEqual(123, proc.poll())
             self.assertIn(b'test_payload.txt', stdout.getvalue())
             self.assertNotIn(b'error_message', stdout.getvalue())
 
@@ -60,7 +60,7 @@ class ExcProcTestCase(unittest.TestCase):
             with exec_proc(args, on_stdout=stdout.write, on_stderr=stderr.write,
                            cwd=tempdir) as proc:
                 proc.wait()
-            self.assertEquals(123, proc.poll())
+            self.assertEqual(123, proc.poll())
             self.assertIn(b'test_payload.txt', stdout.getvalue())
             self.assertNotIn(b'error_message', stdout.getvalue())
             self.assertNotIn(b'test_payload.txt', stderr.getvalue())
@@ -71,7 +71,7 @@ class ExcProcTestCase(unittest.TestCase):
             with exec_proc(args, on_stdout=stdout.write, stderr_to_stdout=True,
                            cwd=tempdir) as proc:
                 proc.wait()
-            self.assertEquals(123, proc.poll())
+            self.assertEqual(123, proc.poll())
             self.assertIn(b'test_payload.txt', stdout.getvalue())
             self.assertIn(b'error_message', stdout.getvalue())
 

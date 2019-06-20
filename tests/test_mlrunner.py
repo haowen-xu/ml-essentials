@@ -1,12 +1,17 @@
-import copy
+# -*- coding: utf-8 -*-
+
 import os
 import re
+import socket
+import stat
 import sys
 import time
 import unittest
 import zipfile
+from contextlib import contextmanager
 from tempfile import TemporaryDirectory
 
+import httpretty
 import pytest
 from bson import ObjectId
 from mock import Mock
@@ -14,13 +19,66 @@ from mock import Mock
 from mltk import Config, ConfigValidationError, MLStorageClient
 from mltk.mlrunner import (ProgramHost, StdoutParser, MLRunnerConfig,
                            SourceCopier, MLRunnerConfigLoader,
-                           TemporaryFileCleaner, JsonFileWatcher, ExperimentDoc)
+                           TemporaryFileCleaner, JsonFileWatcher, ExperimentDoc,
+                           MLRunner)
+from mltk.mlstorage import json_dumps, json_loads
 from tests.flags import slow_test
 
 
 def get_file_content(path):
     with open(path, 'rb') as f:
         return f.read()
+
+
+def write_file_content(path, content):
+    with open(path, 'wb') as f:
+        f.write(content)
+
+
+def dir_snapshot(path):
+    ret = {}
+    for name in os.listdir(path):
+        f_path = os.path.join(path, name)
+        if os.path.isdir(f_path):
+            ret[name] = dir_snapshot(f_path)
+        else:
+            ret[name] = get_file_content(f_path)
+    return ret
+
+
+def prepare_dir(path, snapshot):
+    os.makedirs(path, exist_ok=True)
+
+    for name, value in snapshot.items():
+        f_path = os.path.join(path, name)
+        if isinstance(value, dict):
+            prepare_dir(f_path, value)
+        else:
+            write_file_content(f_path, value)
+
+
+def zip_snapshot(path):
+    ret = {}
+
+    def put_entry(arcname, cnt):
+        t = ret
+        segments = arcname.strip('/').split('/')
+        for n in segments[:-1]:
+            if n not in t:
+                t[n] = {}
+            t = t[n]
+
+        assert(segments[-1] not in t)
+        t[segments[-1]] = cnt
+
+    with zipfile.ZipFile(path, 'r') as zip_file:
+        for e in zip_file.infolist():
+            if e.filename.endswith('/'):
+                put_entry(e.filename, {})
+            else:
+                put_entry(e.filename, zip_file.read(e.filename))
+
+    return ret
 
 
 class MLRunnerConfigTestCase(unittest.TestCase):
@@ -222,6 +280,283 @@ class MLRunnerConfigLoaderTestCase(unittest.TestCase):
             ))
 
 
+class MockMLServer(object):
+
+    def __init__(self, root_dir, uri='http://127.0.0.1:8080'):
+        self._root_dir = root_dir
+        self._uri = uri
+        self._db = {}
+
+    @property
+    def root_dir(self):
+        return self._root_dir
+
+    @property
+    def uri(self):
+        return self._uri
+
+    @property
+    def db(self):
+        return self._db
+
+    def register_uri(self):
+        httpretty.register_uri(
+            'GET',
+            re.compile(self.uri + '/v1/_get/([A-Za-z0-9]+)'),
+            self.handle_get
+        )
+        httpretty.register_uri(
+            'POST',
+            re.compile(self.uri + '/v1/_heartbeat/([A-Za-z0-9]+)'),
+            self.handle_heartbeat
+        )
+        httpretty.register_uri(
+            'POST',
+            re.compile(self.uri + '/v1/_create'),
+            self.handle_create
+        )
+        httpretty.register_uri(
+            'POST',
+            re.compile(self.uri + '/v1/_update/([A-Za-z0-9]+)'),
+            self.handle_update
+        )
+        httpretty.register_uri(
+            'POST',
+            re.compile(self.uri + '/v1/_set_finished/([A-Za-z0-9]+)'),
+            self.handle_set_finished
+        )
+
+    def json_response(self, response_headers, cnt, status=200):
+        if not isinstance(cnt, (str, bytes)):
+            cnt = json_dumps(cnt)
+        if not isinstance(cnt, bytes):
+            cnt = cnt.encode('utf-8')
+        response_headers['content-type'] = 'application/json; charset=utf-8'
+        return [status, response_headers, cnt]
+
+    def handle_heartbeat(self, request, uri, response_headers):
+        id = re.search(r'/v1/_heartbeat/([A-Za-z0-9]+)$', uri).group(1)
+        assert(id in self.db)
+        return self.json_response(response_headers, {})
+
+    def handle_get(self, request, uri, response_headers):
+        id = re.search(r'/v1/_get/([A-Za-z0-9]+)$', uri).group(1)
+        assert(id in self.db)
+        return self.json_response(response_headers, self.db[id])
+
+    def handle_create(self, request, uri, response_headers):
+        assert(request.headers.get('Content-Type', '').split(';', 1)[0] ==
+               'application/json')
+        body = json_loads(request.body.decode('utf-8'))
+        body['_id'] = str(ObjectId())
+        body['storage_dir'] = os.path.join(self.root_dir, body['_id'])
+        self.db[body['_id']] = body
+        return self.json_response(response_headers, self.db[body['_id']])
+
+    def handle_update(self, request, uri, response_headers):
+        id = re.search(r'/v1/_update/([A-Za-z0-9]+)$', uri).group(1)
+        assert(id in self.db)
+        assert (request.headers.get('Content-Type', '').split(';', 1)[0] ==
+                'application/json')
+        body = json_loads(request.body.decode('utf-8'))
+        if body:
+            for key, val in body.items():
+                parts = key.split('.', 1)
+                if len(parts) == 2:
+                    self.db[id].setdefault(parts[0], {})
+                    self.db[id][parts[0]][parts[1]] = val
+                else:
+                    self.db[id][key] = val
+        return self.json_response(response_headers, self.db[id])
+
+    def handle_set_finished(self, request, uri, response_headers):
+        id = re.search(r'/v1/_set_finished/([A-Za-z0-9]+)$', uri).group(1)
+        assert (id in self.db)
+        assert (request.headers.get('Content-Type', '').split(';', 1)[0] ==
+                'application/json')
+        body = json_loads(request.body.decode('utf-8'))
+        if body:
+            for key, val in body.items():
+                parts = key.split('.', 1)
+                if len(parts) == 2:
+                    self.db[id].setdefault(parts[0], {})
+                    self.db[id][parts[0]][parts[1]] = val
+                else:
+                    self.db[id][key] = val
+        return self.json_response(response_headers, self.db[id])
+
+    def __enter__(self):
+        self.register_uri()
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        pass
+
+
+@contextmanager
+def chdir_context(path):
+    pwd = os.getcwd()
+    try:
+        os.chdir(path)
+        yield
+    finally:
+        os.chdir(pwd)
+
+
+def compute_fs_size_and_inode(path):
+    try:
+        st = os.stat(path)
+        if stat.S_ISDIR(st.st_mode):
+            size, inode = st.st_size, 1
+            for name in os.listdir(path):
+                f_path = os.path.join(path, name)
+                f_size, f_inode = compute_fs_size_and_inode(f_path)
+                size += f_size
+                inode += f_inode
+            return size, inode
+        else:
+            return st.st_size, 1
+    except IOError:
+        return 0, 0
+
+
+class MLRunnerTestCase(unittest.TestCase):
+
+    maxDiff = None
+
+    @httpretty.activate
+    def test_run(self):
+        with TemporaryDirectory() as temp_dir:
+            # prepare for the source dir
+            source_root = os.path.join(temp_dir, 'source')
+            source_fiels = {
+                'a.py': b'print("a.py")\n',
+                'a.txt': b'a.txt content\n',
+                'nested': {
+                    'b.sh': b'echo "b.sh"\n'
+                }
+            }
+            prepare_dir(source_root, source_fiels)
+
+            with chdir_context(source_root):
+                # prepare for the test server
+                output_root = os.path.join(temp_dir, 'output')
+                server = MockMLServer(output_root)
+
+                # prepare for the test experiment runner
+                config = MLRunnerConfig(
+                    server=server.uri,
+                    name='test',
+                    args=(
+                        'echo hello; '
+                        'echo \'[Epoch 2/5, Step 3, ETA 5s] epoch_time: 1s; '
+                        'loss: 0.25 (±0.1); span: 5\'; '
+                        'echo \'{"max_epoch": 123}\' > config.json; '
+                        'echo \'{"max_epoch": 100}\' > config.defaults.json; '
+                        'echo \'{"TB": "http://tb:7890"}\' > webui.json; '
+                        'sleep 1; '
+                        'echo \'{"acc": 0.99}\' > result.json; '
+                    ),
+                    daemon=[
+                        ['echo', 'daemon 1'],
+                        'python -m http.server 12367',
+                    ],
+                    gpu=[1, 2]
+                )
+                config.source.copy_to_dst = True
+                config.source.cleanup = False
+                runner = MLRunner(config, retry_intervals=(0.1, 0.2, 0.3))
+
+                # run the test experiment
+                with server:
+                    code = runner.run()
+                    self.assertEqual(code, 0)
+
+                # check the result
+                self.assertEqual(len(server.db), 1)
+                doc = list(server.db.values())[0]
+
+                output_dir = os.path.join(output_root, doc['_id'])
+                size, inode = compute_fs_size_and_inode(output_dir)
+
+                exc_info = doc.pop('exc_info')
+                self.assertIsInstance(exc_info, dict)
+                self.assertEqual(exc_info['hostname'], socket.gethostname())
+                self.assertIsInstance(exc_info['pid'], int)
+                self.assertIsInstance(exc_info['env'], dict)
+                self.assertEqual(exc_info['env']['PYTHONUNBUFFERED'], '1')
+                self.assertEqual(exc_info['env']['MLSTORAGE_SERVER_URI'],
+                                 'http://127.0.0.1:8080')
+                self.assertEqual(exc_info['env']['MLSTORAGE_EXPERIMENT_ID'],
+                                 doc['_id'])
+                self.assertEqual(exc_info['env']['MLSTORAGE_OUTPUT_DIR'],
+                                 output_dir)
+                self.assertEqual(exc_info['env']['PWD'], output_dir)
+                self.assertEqual(exc_info['env']['CUDA_VISIBLE_DEVICES'], '1,2')
+                self.assertIn(output_dir, exc_info['env']['PYTHONPATH'])
+                self.assertIn(source_root, exc_info['env']['PYTHONPATH'])
+
+                self.assertDictEqual(doc, {
+                    'name': config.name,
+                    '_id': doc["_id"],
+                    'storage_dir': os.path.join(
+                        temp_dir, f'output/{doc["_id"]}'),
+                    'args': config.args,
+                    'progress': {'epoch': '2/5', 'step': 3, 'eta': '5s'},
+                    'result': {'acc': 0.99, 'span': '5', 'loss': '0.25 (±0.1)'},
+                    'exit_code': code,
+                    'storage_size': size,
+                    'storage_inode': inode,
+                    'status': 'COMPLETED',
+                    'config': {'max_epoch': 123},
+                    'default_config': {'max_epoch': 100},
+                    'webui': {'SimpleHTTP': 'http://0.0.0.0:12367/',
+                              'TB': 'http://tb:7890'},
+                })
+
+                output_snapshot = dir_snapshot(output_dir)
+                self.assertEqual(
+                    set(output_snapshot),
+                    {'config.defaults.json', 'config.json', 'console.log',
+                     'daemon.0.log', 'daemon.1.log', 'mlrun.log',
+                     'result.json', 'webui.json', 'source.zip', 'a.py',
+                     'nested'}
+                )
+
+                self.assertEqual(output_snapshot['config.defaults.json'],
+                                 b'{"max_epoch": 100}\n')
+                self.assertEqual(output_snapshot['config.json'],
+                                 b'{"max_epoch": 123}\n')
+                self.assertEqual(output_snapshot['console.log'],
+                                 b'hello\n'
+                                 b'[Epoch 2/5, Step 3, ETA 5s] epoch_time: 1s; '
+                                 b'loss: 0.25 (\xc2\xb10.1); span: 5\n')
+                self.assertEqual(output_snapshot['result.json'],
+                                 b'{"acc": 0.99}\n')
+                self.assertEqual(output_snapshot['webui.json'],
+                                 b'{"TB": "http://tb:7890"}\n')
+                self.assertEqual(output_snapshot['daemon.0.log'],
+                                 b'daemon 1\n')
+                self.assertTrue(output_snapshot['daemon.1.log'].startswith(
+                    b'Serving HTTP on 0.0.0.0 port 12367 '
+                    b'(http://0.0.0.0:12367/)'
+                ))
+                self.assertEqual(output_snapshot['a.py'], b'print("a.py")\n')
+                self.assertDictEqual(output_snapshot['nested'], {
+                    'b.sh': b'echo "b.sh"\n',
+                })
+
+                self.assertDictEqual(
+                    zip_snapshot(os.path.join(output_dir, 'source.zip')),
+                    {
+                        'a.py': b'print("a.py")\n',
+                        'nested': {
+                            'b.sh': b'echo "b.sh"\n'
+                        }
+                    }
+                )
+
+
 class StdoutParserTestCase(unittest.TestCase):
 
     def test_parse(self):
@@ -419,57 +754,6 @@ class ProgramHostTestCase(unittest.TestCase):
             self.assertEqual(get_file_content(log_file), b'goodbye\n')
 
 
-def write_file_content(path, content):
-    with open(path, 'wb') as f:
-        f.write(content)
-
-
-def dir_snapshot(path):
-    ret = {}
-    for name in os.listdir(path):
-        f_path = os.path.join(path, name)
-        if os.path.isdir(f_path):
-            ret[name] = dir_snapshot(f_path)
-        else:
-            ret[name] = get_file_content(f_path)
-    return ret
-
-
-def prepare_dir(path, snapshot):
-    os.makedirs(path, exist_ok=True)
-
-    for name, value in snapshot.items():
-        f_path = os.path.join(path, name)
-        if isinstance(value, dict):
-            prepare_dir(f_path, value)
-        else:
-            write_file_content(f_path, value)
-
-
-def zip_snapshot(path):
-    ret = {}
-
-    def put_entry(arcname, cnt):
-        t = ret
-        segments = arcname.strip('/').split('/')
-        for n in segments[:-1]:
-            if n not in t:
-                t[n] = {}
-            t = t[n]
-
-        assert(segments[-1] not in t)
-        t[segments[-1]] = cnt
-
-    with zipfile.ZipFile(path, 'r') as zip_file:
-        for e in zip_file.infolist():
-            if e.filename.endswith('/'):
-                put_entry(e.filename, {})
-            else:
-                put_entry(e.filename, zip_file.read(e.filename))
-
-    return ret
-
-
 class ExperimentDocTestCase(unittest.TestCase):
 
     maxDiff = None
@@ -488,6 +772,7 @@ class ExperimentDocTestCase(unittest.TestCase):
         self.assertIs(doc.client, client)
         self.assertEqual(doc.value, original_doc)
         self.assertEqual(doc.id, object_id)
+        self.assertFalse(doc.has_set_finished)
 
         # test merge_doc_updates
         self.assertDictEqual(doc.merge_doc_updates(), original_doc)
@@ -534,6 +819,7 @@ class ExperimentDocTestCase(unittest.TestCase):
         self.assertTrue(client.set_finished.called)
         self.assertDictEqual(doc.value, merged_doc)
         self.assertIsNone(doc.updates)
+        self.assertTrue(doc.has_set_finished)
 
         # test set_finished without updates
         def mock_set_finished(id, status, updates):
@@ -559,6 +845,7 @@ class ExperimentDocTestCase(unittest.TestCase):
             raise RuntimeError(f'This is a runtime error: {len(time_logs)}.')
 
         client.set_finished = Mock(wraps=mock_set_finished)
+        doc._has_set_finished = False
         with pytest.raises(RuntimeError, match='This is a runtime error: 4'):
             doc.set_finished('COMPLETED', retry_intervals=(0.1, 0.2, 0.3))
 
@@ -566,6 +853,7 @@ class ExperimentDocTestCase(unittest.TestCase):
         self.assertLess(abs(time_logs[1] - time_logs[0] - 0.1), 0.05)
         self.assertLess(abs(time_logs[2] - time_logs[1] - 0.2), 0.05)
         self.assertLess(abs(time_logs[3] - time_logs[2] - 0.3), 0.05)
+        self.assertFalse(doc.has_set_finished)
 
     @slow_test
     def test_background_worker(self):

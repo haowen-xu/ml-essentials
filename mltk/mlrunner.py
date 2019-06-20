@@ -29,7 +29,7 @@ from .utils import exec_proc
 
 __all__ = ['MLRunnerConfig', 'MLRunner']
 
-LOG_LEVEL = 'INFO'
+LOG_LEVEL = 'DEBUG'
 LOG_FORMAT = '%(asctime)s [%(levelname)-8s] %(message)s'
 
 PatternType = getattr(typing, 'Pattern', getattr(re, 'Pattern', Any))
@@ -172,23 +172,43 @@ class MLRunnerConfig(Config):
 
 
 class MLRunner(object):
+    """The machine learning experiment runner."""
 
-    def __init__(self, config: MLRunnerConfig):
+    def __init__(self,
+                 config: MLRunnerConfig,
+                 retry_intervals: Sequence[float] = (10, 20, 30, 50, 80,
+                                                     130, 210)):
+        """
+        Construct a new :class:`MLRunner`.
+
+        Args:
+            config: The runner configuration.
+            retry_intervals: The intervals to sleep between two attempts
+                to save the finish status.
+        """
         self._config = config
         self._client = MLStorageClient(config.server)
+        self._retry_intervals = tuple(retry_intervals)
         self._doc = None  # type: ExperimentDoc
         self._clone_doc = None  # type: DocumentType
 
     @property
     def config(self) -> MLRunnerConfig:
+        """Get the runner configuration."""
         return self._config
 
     @property
     def client(self) -> MLStorageClient:
+        """Get the MLStorage client."""
         return self._client
 
     @property
+    def retry_intervals(self) -> Tuple[float]:
+        return self._retry_intervals
+
+    @property
     def doc(self) -> 'ExperimentDoc':
+        """Get the experiment document object."""
         return self._doc
 
     def env_dict(self, experiment_id, output_dir, work_dir) -> Dict[str, str]:
@@ -250,7 +270,7 @@ class MLRunner(object):
     def _fs_stats(self, path):
         try:
             st = os.stat(path, follow_symlinks=False)
-        except IOError:
+        except IOError:  # pragma: no cover
             return 0, 0
         else:
             size, count = st.st_size, 1
@@ -266,13 +286,10 @@ class MLRunner(object):
 
         if metrics:
             def format_value(v):
-                if isinstance(v, (tuple, list)):
-                    if v[1] is not None:
-                        return f'{v[0]} (±{v[1]})'
-                    else:
-                        return v[0]
+                if v[1] is not None:
+                    return f'{v[0]} (±{v[1]})'
                 else:
-                    return v
+                    return v[0]
 
             metrics = {k: format_value(v) for k, v in metrics.items()
                        if k.rsplit('_', 1)[-1] != 'time'}
@@ -341,7 +358,6 @@ class MLRunner(object):
             'args': self.config.args,
             'exc_info': {
                 'hostname': socket.gethostname(),
-                'pid': os.getpid(),
                 'env': env,
             }
         })
@@ -382,7 +398,8 @@ class MLRunner(object):
             source_dir=self.config.source.src_dir,
             dest_dir=os.path.join(output_dir, self.config.source.dst_dir),
             includes=self.config.source.includes,
-            excludes=self.config.source.excludes
+            excludes=self.config.source.excludes,
+            cleanup=self.config.source.cleanup,
         )
 
         # create the background json watcher
@@ -398,17 +415,18 @@ class MLRunner(object):
         json_watcher.on_json_updated.do(self._on_json_updated)
 
         # now execute the processes
+        @contextmanager
         def wrap_daemon_process(daemon):
             proc = None
             try:
                 with daemon.exec_proc() as p:
-                    proc = None
-                    yield daemon
+                    proc = p
+                    yield proc
             finally:
                 if proc is not None:
                     code = proc.poll()
                     if code is not None:
-                        getLogger(__name__).info(f'Daemon process {daemon.pid} '
+                        getLogger(__name__).info(f'Daemon process {proc.pid} '
                                                  f'exited with code: {code}')
 
         with ExitStack() as ctx_stack:
@@ -452,6 +470,15 @@ class MLRunner(object):
                     'Started experiment process %s: %s',
                     proc.pid, self.config.args
                 )
+
+                # update the doc with execution info
+                self.doc.update({
+                    'exc_info': {
+                        'pid': proc.pid,
+                    }
+                })
+
+                # wait for the process to exit
                 code = proc.wait()
                 getLogger(__name__).info(
                     f'Experiment process exited with code: {code}')
@@ -459,6 +486,7 @@ class MLRunner(object):
             return proc.wait()
 
     def run(self):
+        """Run the experiment."""
         # get the previous experiment if we are cloning from any one
         if self.config.clone_from:
             self._clone_doc = self.client.get(self.config.clone_from)
@@ -492,7 +520,7 @@ class MLRunner(object):
         fs_size = None
         inode_count = None
         exit_code = None
-        doc_id = doc['id']
+        doc_id = doc['_id']
 
         try:
             output_dir = doc['storage_dir']
@@ -519,28 +547,38 @@ class MLRunner(object):
 
                 except Exception as ex:
                     final_status = 'FAILED'
-                    self.doc.set_finished(final_status, filter_dict({
-                        'error': {
-                            'message': str(ex),
-                            'traceback': ''.join(
-                                traceback.format_exception(*sys.exc_info()))
-                        },
-                        'exit_code': exit_code,
-                        'storage_size': fs_size,
-                        'storage_inode': inode_count,
-                    }))
                     getLogger(__name__).error(
                         'Failed to run the experiment.', exc_info=True)
+                    self.doc.set_finished(
+                        final_status,
+                        filter_dict({
+                            'error': {
+                                'message': str(ex),
+                                'traceback': ''.join(
+                                    traceback.format_exception(*sys.exc_info()))
+                            },
+                            'exit_code': exit_code,
+                            'storage_size': fs_size,
+                            'storage_inode': inode_count,
+                        }),
+                        retry_intervals=self.retry_intervals
+                    )
+                    raise
+
                 else:
                     final_status = 'COMPLETED'
-                    self.doc.set_finished(final_status, filter_dict({
-                        'exit_code': exit_code,
-                        'storage_size': fs_size,
-                        'storage_inode': inode_count,
-                    }))
+                    self.doc.set_finished(
+                        final_status,
+                        filter_dict({
+                            'exit_code': exit_code,
+                            'storage_size': fs_size,
+                            'storage_inode': inode_count,
+                        }),
+                        retry_intervals=self.retry_intervals
+                    )
                 finally:
                     self.doc.stop_worker()
-                    remain_updates = self.doc.merge_doc_updates()
+                    remain_updates = self.doc.updates
 
                     if remain_updates:  # pragma: no cover
                         # final attempt to save the remaining updates
@@ -548,15 +586,17 @@ class MLRunner(object):
                         self.client.update(doc_id, remain_updates)
 
         except Exception as ex:
-            self.client.set_finished(doc_id, 'FAILED', {
-                'error': {
-                    'message': str(ex),
-                    'traceback': ''.join(
-                        traceback.format_exception(*sys.exc_info()))
-                }
-            })
-            getLogger(__name__).error(
-                'Failed to run the experiment.', exc_info=True)
+            if self.doc is None or not self.doc.has_set_finished:
+                getLogger(__name__).error(
+                    'Failed to run the experiment.', exc_info=True)
+                self.client.set_finished(doc_id, 'FAILED', {
+                    'error': {
+                        'message': str(ex),
+                        'traceback': ''.join(
+                            traceback.format_exception(*sys.exc_info()))
+                    }
+                })
+            raise
 
         return exit_code
 
@@ -1176,7 +1216,7 @@ class ExperimentDoc(object):
     document to the server in background thread.
     """
 
-    KEYS_TO_EXPAND = ('result', 'webui')
+    KEYS_TO_EXPAND = ('result', 'webui', 'exc_info')
 
     def __init__(self,
                  client: MLStorageClient,
@@ -1194,6 +1234,7 @@ class ExperimentDoc(object):
         self._value = value
         self._interval = heartbeat_interval
         self._updates = None  # type: DocumentType
+        self._has_set_finished = False
 
         # state of the background worker
         self._stopped = False
@@ -1222,6 +1263,13 @@ class ExperimentDoc(object):
         """Get the pending updates."""
         return self._updates
 
+    @property
+    def has_set_finished(self) -> bool:
+        """
+        Whether or not :meth:`set_finished()` has been successfully called.
+        """
+        return self._has_set_finished
+
     def merge_doc_updates(self) -> DocumentType:
         """Merge the pending updates into the document locally."""
         with self._update_lock:
@@ -1238,7 +1286,7 @@ class ExperimentDoc(object):
                         doc[key] = val
             return doc
 
-    def update(self, fields: DocumentType):
+    def update(self, fields: DocumentType, notify_worker: bool = True):
         """
         Update the experiment document.
 
@@ -1246,6 +1294,7 @@ class ExperimentDoc(object):
 
         Args:
             fields: The new fields.
+            notify_worker: Whether or not to notify the background worker?
         """
         with self._update_lock:
             updates = self._updates
@@ -1263,8 +1312,9 @@ class ExperimentDoc(object):
 
             self._updates = updates
 
-        with self._wait_cond:
-            self._wait_cond.notify_all()
+        if notify_worker:
+            with self._wait_cond:
+                self._wait_cond.notify_all()
 
     def set_finished(self,
                      status: str,
@@ -1283,7 +1333,7 @@ class ExperimentDoc(object):
         # gather all update fields
         with self._update_lock:
             if updates:
-                self.update(updates)
+                self.update(updates, notify_worker=False)
             updates = self._updates
             self._updates = None
 
@@ -1304,6 +1354,7 @@ class ExperimentDoc(object):
                 )
             else:
                 last_ex = None
+                self._has_set_finished = True
                 break
 
         if last_ex is not None:
@@ -1393,7 +1444,8 @@ class SourceCopier(object):
                  source_dir: str,
                  dest_dir: str,
                  includes: List[PatternType],
-                 excludes: List[PatternType]):
+                 excludes: List[PatternType],
+                 cleanup: bool = False):
         """
         Construct a new :class:`SourceCopier`.
 
@@ -1409,6 +1461,7 @@ class SourceCopier(object):
         self._excludes = excludes
         self._created_dirs = []
         self._copied_files = []
+        self._cleanup = cleanup
 
     @property
     def file_count(self) -> int:
@@ -1531,9 +1584,11 @@ class SourceCopier(object):
 
     def __enter__(self):
         self.clone_dir()
+        return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        self.cleanup_dir()
+        if self._cleanup:
+            self.cleanup_dir()
 
 
 class TemporaryFileCleaner(object):
@@ -1734,6 +1789,7 @@ class JsonFileWatcher(object):
 
     def __enter__(self):
         self.start_worker()
+        return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         try:
