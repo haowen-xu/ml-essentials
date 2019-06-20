@@ -456,13 +456,14 @@ class MLRunner(object):
             getLogger(__name__).debug('JSON file watcher started.')
 
             # start the daemon processes
-            for daemon, daemon_args in zip(daemons, self.config.daemon):
-                daemon_proc = ctx_stack.enter_context(
-                    wrap_daemon_process(daemon))
-                getLogger(__name__).info(
-                    f'Started daemon process {daemon_proc.pid}: %s',
-                    daemon_args
-                )
+            if daemons and self.config.daemon:
+                for daemon, daemon_args in zip(daemons, self.config.daemon):
+                    daemon_proc = ctx_stack.enter_context(
+                        wrap_daemon_process(daemon))
+                    getLogger(__name__).info(
+                        f'Started daemon process {daemon_proc.pid}: %s',
+                        daemon_args
+                    )
 
             # run the main process
             with main_proc.exec_proc() as proc:
@@ -549,6 +550,7 @@ class MLRunner(object):
                     final_status = 'FAILED'
                     getLogger(__name__).error(
                         'Failed to run the experiment.', exc_info=True)
+                    self.doc.stop_worker()
                     self.doc.set_finished(
                         final_status,
                         filter_dict({
@@ -567,6 +569,7 @@ class MLRunner(object):
 
                 else:
                     final_status = 'COMPLETED'
+                    self.doc.stop_worker()
                     self.doc.set_finished(
                         final_status,
                         filter_dict({
@@ -576,14 +579,6 @@ class MLRunner(object):
                         }),
                         retry_intervals=self.retry_intervals
                     )
-                finally:
-                    self.doc.stop_worker()
-                    remain_updates = self.doc.updates
-
-                    if remain_updates:  # pragma: no cover
-                        # final attempt to save the remaining updates
-                        # should rarely happen
-                        self.client.update(doc_id, remain_updates)
 
         except Exception as ex:
             if self.doc is None or not self.doc.has_set_finished:

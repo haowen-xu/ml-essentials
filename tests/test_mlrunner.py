@@ -12,6 +12,7 @@ from contextlib import contextmanager
 from tempfile import TemporaryDirectory
 
 import httpretty
+import mock
 import pytest
 from bson import ObjectId
 from mock import Mock
@@ -447,20 +448,24 @@ class MLRunnerTestCase(unittest.TestCase):
                 config = MLRunnerConfig(
                     server=server.uri,
                     name='test',
-                    args=(
-                        'echo hello; '
-                        'echo \'[Epoch 2/5, Step 3, ETA 5s] epoch_time: 1s; '
-                        'loss: 0.25 (±0.1); span: 5\'; '
-                        'echo \'{"max_epoch": 123}\' > config.json; '
-                        'echo \'{"max_epoch": 100}\' > config.defaults.json; '
-                        'echo \'{"TB": "http://tb:7890"}\' > webui.json; '
-                        'sleep 1; '
-                        'echo \'{"acc": 0.99}\' > result.json; '
-                    ),
+                    args=[
+                        'python',
+                        '-c',
+                        'print("hello")\n'
+                        'print("[Epoch 2/5, Step 3, ETA 5s] epoch_time: 1s; loss: 0.25 (±0.1); span: 5")\n'
+                        'open("config.json", "wb").write(b"{\\"max_epoch\\": 123}\\n")\n'
+                        'open("config.defaults.json", "wb").write(b"{\\"max_epoch\\": 100}\\n")\n'
+                        'open("webui.json", "wb").write(b"{\\"TB\\": \\"http://tb:7890\\"}\\n")\n'
+                        'import time\n'
+                        'time.sleep(1)\n'
+                        'open("result.json", "wb").write(b"{\\"acc\\": 0.99}\\n")\n'
+                    ],
                     daemon=[
                         ['echo', 'daemon 1'],
                         'python -m http.server 12367',
+                        'env',
                     ],
+                    env=Config(MY_ENV='abc'),
                     gpu=[1, 2]
                 )
                 config.source.copy_to_dst = True
@@ -518,9 +523,9 @@ class MLRunnerTestCase(unittest.TestCase):
                 self.assertEqual(
                     set(output_snapshot),
                     {'config.defaults.json', 'config.json', 'console.log',
-                     'daemon.0.log', 'daemon.1.log', 'mlrun.log',
-                     'result.json', 'webui.json', 'source.zip', 'a.py',
-                     'nested'}
+                     'daemon.0.log', 'daemon.1.log', 'daemon.2.log',
+                     'mlrun.log', 'result.json', 'webui.json', 'source.zip',
+                     'a.py', 'nested'}
                 )
 
                 self.assertEqual(output_snapshot['config.defaults.json'],
@@ -541,6 +546,7 @@ class MLRunnerTestCase(unittest.TestCase):
                     b'Serving HTTP on 0.0.0.0 port 12367 '
                     b'(http://0.0.0.0:12367/)'
                 ))
+                self.assertIn(b'MY_ENV=abc\n', output_snapshot['daemon.2.log'])
                 self.assertEqual(output_snapshot['a.py'], b'print("a.py")\n')
                 self.assertDictEqual(output_snapshot['nested'], {
                     'b.sh': b'echo "b.sh"\n',
@@ -555,6 +561,243 @@ class MLRunnerTestCase(unittest.TestCase):
                         }
                     }
                 )
+
+    @httpretty.activate
+    def test_copy_arg_files_resume_and_clone(self):
+        parent_id = str(ObjectId())
+
+        with TemporaryDirectory() as temp_dir:
+            # prepare for the source dir
+            source_root = os.path.join(temp_dir, 'source')
+            source_fiels = {
+                'a.py': b'print("a.py")\n',
+                'a.txt': b'a.txt content\n',
+                'nested': {
+                    'b.sh': b'echo "b.sh"\nexit 1\n'
+                }
+            }
+            prepare_dir(source_root, source_fiels)
+
+            with chdir_context(source_root):
+                # prepare for the test server
+                output_root = os.path.join(temp_dir, 'output')
+                server = MockMLServer(output_root)
+
+                # test copy arg files
+                config = MLRunnerConfig(
+                    server=server.uri,
+                    args='sh nested/b.sh a.txt'.split(' '),
+                    parent_id=parent_id,
+                )
+                config.source.make_archive = False  # test no source archive
+                runner = MLRunner(config, retry_intervals=(0.1, 0.2, 0.3))
+
+                with server:
+                    code = runner.run()
+                    self.assertEqual(code, 1)
+
+                self.assertEqual(len(server.db), 1)
+                doc = list(server.db.values())[0]
+                self.assertEqual(doc['exit_code'], 1)
+                self.assertEqual(doc['status'], 'COMPLETED')
+                self.assertEqual(doc['parent_id'], parent_id)
+                self.assertEqual(doc['name'], ' '.join(config.args))
+
+                output_snapshot = dir_snapshot(doc['storage_dir'])
+                self.assertEqual(output_snapshot['console.log'], b'b.sh\n')
+                self.assertEqual(output_snapshot['nested'], {
+                    'b.sh': b'echo "b.sh"\nexit 1\n',
+                })
+                self.assertNotIn('source.zip', output_snapshot)
+                self.assertNotIn('a.txt', output_snapshot)
+                self.assertNotIn('a.py', output_snapshot)
+
+                # test resume from
+                config = MLRunnerConfig(
+                    server=server.uri,
+                    args='echo hello',
+                    resume_from=doc['_id'],
+                )
+                config.source.make_archive = False
+                runner = MLRunner(config, retry_intervals=(0.1, 0.2, 0.3))
+
+                with server:
+                    code = runner.run()
+                    self.assertEqual(code, 0)
+
+                self.assertEqual(len(server.db), 1)
+                doc2 = list(server.db.values())[0]
+                self.assertEqual(doc2, doc)
+
+                output_snapshot = dir_snapshot(doc['storage_dir'])
+                self.assertEqual(output_snapshot['console.log'],
+                                 b'b.sh\nhello\n')
+
+                # test clone from
+                config = MLRunnerConfig(
+                    server=server.uri,
+                    args='echo hi',
+                    clone_from=doc['_id'],
+                )
+                config.source.make_archive = False
+                runner = MLRunner(config, retry_intervals=(0.1, 0.2, 0.3))
+
+                with server:
+                    code = runner.run()
+                    self.assertEqual(code, 0)
+
+                self.assertEqual(len(server.db), 2)
+                doc3 = list(server.db.values())[1]
+                self.assertNotEqual(doc3['_id'], doc['_id'])
+                self.assertNotEqual(doc3['storage_dir'], doc['storage_dir'])
+
+                output_snapshot = dir_snapshot(doc3['storage_dir'])
+                self.assertEqual(output_snapshot['console.log'],
+                                 b'b.sh\nhello\nhi\n')
+                self.assertEqual(output_snapshot['nested'], {
+                    'b.sh': b'echo "b.sh"\nexit 1\n',
+                })
+
+    @httpretty.activate
+    def test_work_dir(self):
+        parent_id = str(ObjectId())
+
+        @contextmanager
+        def set_parent_id():
+            os.environ['MLSTORAGE_EXPERIMENT_ID'] = parent_id
+            try:
+                yield
+            finally:
+                del os.environ['MLSTORAGE_EXPERIMENT_ID']
+
+        with TemporaryDirectory() as temp_dir, set_parent_id():
+            # prepare for the source dir
+            source_root = os.path.join(temp_dir, 'source')
+            source_fiels = {
+                'a.py': b'print("a.py")\n',
+                'a.txt': b'a.txt content\n',
+                'nested': {
+                    'b.sh': b'echo "b.sh"\nexit 1\n'
+                }
+            }
+            prepare_dir(source_root, source_fiels)
+
+            # prepare for the work dir
+            work_dir = os.path.join(temp_dir, 'work')
+            os.makedirs(work_dir)
+
+            with chdir_context(source_root):
+                # prepare for the test server
+                output_root = os.path.join(temp_dir, 'output')
+                server = MockMLServer(output_root)
+
+                # test copy arg files
+                config = MLRunnerConfig(
+                    server=server.uri,
+                    args='echo nested/b.sh a.txt; echo hello > temp.txt',
+                    daemon=['pwd'],
+                    work_dir=work_dir,
+                )
+                config.source.make_archive = False  # test no source archive
+                runner = MLRunner(config, retry_intervals=(0.1, 0.2, 0.3))
+
+                with server:
+                    code = runner.run()
+                    self.assertEqual(code, 0)
+
+                self.assertEqual(len(server.db), 1)
+                doc = list(server.db.values())[0]
+                self.assertEqual(doc['exit_code'], 0)
+                self.assertEqual(doc['status'], 'COMPLETED')
+                self.assertEqual(doc['parent_id'], parent_id)
+                self.assertEqual(doc['name'], config.args)
+                self.assertNotEqual(doc['storage_dir'], work_dir)
+
+                output_snapshot = dir_snapshot(doc['storage_dir'])
+                self.assertEqual(output_snapshot['console.log'],
+                                 b'nested/b.sh a.txt\n')
+                self.assertEqual(output_snapshot['daemon.0.log'],
+                                 f'{work_dir}\n'.encode('utf-8'))
+                self.assertEqual(output_snapshot['nested'], {
+                    'b.sh': b'echo "b.sh"\nexit 1\n',
+                })
+                self.assertNotIn('source.zip', output_snapshot)
+                self.assertNotIn('a.txt', output_snapshot)
+                self.assertNotIn('a.py', output_snapshot)
+
+                work_dir_snapshot = dir_snapshot(work_dir)
+                self.assertDictEqual(work_dir_snapshot, {
+                    'temp.txt': b'hello\n'
+                })
+
+    @httpretty.activate
+    def test_inner_error(self):
+        def mock_gethostname():
+            raise RuntimeError('cannot get hostname')
+
+        with TemporaryDirectory() as temp_dir, \
+                mock.patch('socket.gethostname', mock_gethostname):
+            # prepare for the test server
+            output_root = os.path.join(temp_dir, 'output')
+            server = MockMLServer(output_root)
+
+            # test copy arg files
+            config = MLRunnerConfig(
+                server=server.uri,
+                args='echo hello',
+            )
+            config.source.make_archive = False  # test no source archive
+            runner = MLRunner(config, retry_intervals=(0.1, 0.2, 0.3))
+
+            with pytest.raises(RuntimeError, match='cannot get hostname'):
+                with server:
+                    _ = runner.run()
+
+            self.assertEqual(len(server.db), 1)
+            doc = list(server.db.values())[0]
+
+            self.assertEqual(doc['status'], 'FAILED')
+            self.assertEqual(doc['error']['message'], 'cannot get hostname')
+            self.assertIn('RuntimeError: cannot get hostname',
+                          doc['error']['traceback'])
+
+            log_cnt = get_file_content(
+                os.path.join(doc['storage_dir'], 'mlrun.log'))
+            self.assertIn(b'RuntimeError: cannot get hostname', log_cnt)
+
+    @httpretty.activate
+    def test_outer_error(self):
+        @contextmanager
+        def mock_configure_logger(*args, **kwargs):
+            raise RuntimeError('cannot configure logger')
+            yield
+
+        with TemporaryDirectory() as temp_dir, \
+                mock.patch('mltk.mlrunner.configure_logger',
+                           mock_configure_logger):
+            # prepare for the test server
+            output_root = os.path.join(temp_dir, 'output')
+            server = MockMLServer(output_root)
+
+            # test copy arg files
+            config = MLRunnerConfig(
+                server=server.uri,
+                args='echo hello',
+            )
+            config.source.make_archive = False  # test no source archive
+            runner = MLRunner(config, retry_intervals=(0.1, 0.2, 0.3))
+
+            with pytest.raises(RuntimeError, match='cannot configure logger'):
+                with server:
+                    _ = runner.run()
+
+            self.assertEqual(len(server.db), 1)
+            doc = list(server.db.values())[0]
+
+            self.assertEqual(doc['status'], 'FAILED')
+            self.assertEqual(doc['error']['message'], 'cannot configure logger')
+            self.assertIn('RuntimeError: cannot configure logger',
+                          doc['error']['traceback'])
 
 
 class StdoutParserTestCase(unittest.TestCase):
