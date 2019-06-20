@@ -839,13 +839,10 @@ class ConfigLoader(Generic[TConfig]):
         Args:
             path: Path of the JSON file.
             cls: The JSON decoder class.
-
-        Returns:
-            The loaded config object.
         """
         with codecs.open(path, 'rb', 'utf-8') as f:
             obj = json.load(f, cls=cls)
-            return self.load_object(obj)
+            self.load_object(obj)
 
     def load_yaml(self, path: Union[str, bytes, PathLike],
                   Loader=yaml.Loader) -> TConfig:
@@ -855,13 +852,11 @@ class ConfigLoader(Generic[TConfig]):
         Args:
             path: Path of the YAML file.
             Loader: The YAML loader class.
-
-        Returns:
-            The loaded config object.
         """
         with codecs.open(path, 'rb', 'utf-8') as f:
             obj = yaml.load(f, Loader=Loader)
-            return self.load_object(obj)
+            if obj is not None:
+                self.load_object(obj)
 
     def load_file(self, path: Union[str, bytes, PathLike]) -> TConfig:
         """
@@ -874,16 +869,13 @@ class ConfigLoader(Generic[TConfig]):
 
         Args:
             path: Path of the file.
-
-        Returns:
-            The loaded config object.
         """
         name, ext = os.path.splitext(path)
         ext = ext.lower()
         if ext in ('.yml', '.yaml'):
-            return self.load_yaml(path)
+            self.load_yaml(path)
         elif ext in ('.json',):
-            return self.load_json(path)
+            self.load_json(path)
         else:
             raise IOError(f'Unsupported config file extension: {ext}')
 

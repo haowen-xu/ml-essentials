@@ -616,8 +616,7 @@ class MLRunner(object):
 @click.option('-w', '--work-dir', required=False, default=None,
               help='Use this work directory, instead of using the MLStorage '
                    'output dir.')
-@click.option('-s', '--server', required=False,
-              default=os.environ.get('MLSTORAGE_SERVER_URI', '') or None,
+@click.option('-s', '--server', required=False, default=None,
               help='Specify the URI of MLStorage API server, e.g., '
                    '"http://localhost:8080".  If not specified, will use '
                    '``os.environ["MLSTORAGE_SERVER_URI"]``.')
@@ -745,11 +744,11 @@ def mlrun(config_file, name, description, tags, env, gpu, work_dir, server,
         'env': env_dict,
         'gpu': gpu_list,
         'work_dir': work_dir,
-        'server': server,
+        'server': server or os.environ.get('MLSTORAGE_SERVER_URI', None),
         'source.copy_to_dst': copy_source,
-        'source.source_archive': source_archive,
+        'source.make_archive': source_archive,
         'integration.parse_stdout': parse_stdout,
-        'daemon': daemon,
+        'daemon': daemon or None,
         'args': command or args,
     }
     cli_config = {k: v for k, v in cli_config.items()

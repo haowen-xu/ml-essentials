@@ -15,13 +15,14 @@ import httpretty
 import mock
 import pytest
 from bson import ObjectId
+from click.testing import CliRunner
 from mock import Mock
 
 from mltk import Config, ConfigValidationError, MLStorageClient
 from mltk.mlrunner import (ProgramHost, StdoutParser, MLRunnerConfig,
                            SourceCopier, MLRunnerConfigLoader,
                            TemporaryFileCleaner, JsonFileWatcher, ExperimentDoc,
-                           MLRunner)
+                           MLRunner, mlrun)
 from mltk.mlstorage import json_dumps, json_loads
 from tests.flags import slow_test
 
@@ -425,6 +426,7 @@ class MLRunnerTestCase(unittest.TestCase):
 
     maxDiff = None
 
+    @slow_test
     @httpretty.activate
     def test_run(self):
         with TemporaryDirectory() as temp_dir:
@@ -562,6 +564,7 @@ class MLRunnerTestCase(unittest.TestCase):
                     }
                 )
 
+    @slow_test
     @httpretty.activate
     def test_copy_arg_files_resume_and_clone(self):
         parent_id = str(ObjectId())
@@ -658,6 +661,7 @@ class MLRunnerTestCase(unittest.TestCase):
                     'b.sh': b'echo "b.sh"\nexit 1\n',
                 })
 
+    @slow_test
     @httpretty.activate
     def test_work_dir(self):
         parent_id = str(ObjectId())
@@ -730,6 +734,7 @@ class MLRunnerTestCase(unittest.TestCase):
                     'temp.txt': b'hello\n'
                 })
 
+    @slow_test
     @httpretty.activate
     def test_inner_error(self):
         def mock_gethostname():
@@ -765,6 +770,7 @@ class MLRunnerTestCase(unittest.TestCase):
                 os.path.join(doc['storage_dir'], 'mlrun.log'))
             self.assertIn(b'RuntimeError: cannot get hostname', log_cnt)
 
+    @slow_test
     @httpretty.activate
     def test_outer_error(self):
         @contextmanager
@@ -798,6 +804,122 @@ class MLRunnerTestCase(unittest.TestCase):
             self.assertEqual(doc['error']['message'], 'cannot configure logger')
             self.assertIn('RuntimeError: cannot configure logger',
                           doc['error']['traceback'])
+
+
+class PatchedMLRunner(MLRunner):
+
+    exit_code: int = 0
+    last_instance: 'PatchedMLRunner' = None
+
+    def __init__(self, config):
+        super().__init__(config)
+        self.__class__.last_instance = self
+
+    def run(self):
+        return self.exit_code
+
+
+class PatchedMLRunnerConfigLoader(MLRunnerConfigLoader):
+
+    last_instance: 'PatchedMLRunnerConfigLoader' = None
+
+    def __init__(self, config_files):
+        super().__init__(config_files=config_files)
+        self.__class__.last_instance = self
+        self.loaded = False
+
+    def load_config_files(self, on_load = None):
+        super().load_config_files(on_load)
+        self.loaded = True
+
+
+class MLRunTestCase(unittest.TestCase):
+
+    @mock.patch('mltk.mlrunner.MLRunner', PatchedMLRunner)
+    @mock.patch('mltk.mlrunner.MLRunnerConfigLoader',
+                PatchedMLRunnerConfigLoader)
+    def test_mlrun(self):
+        with TemporaryDirectory() as temp_dir:
+            config1 = os.path.join(temp_dir, 'config1.yml')
+            config2 = os.path.join(temp_dir, 'config2.yml')
+            write_file_content(config1, b'')
+            write_file_content(config2, b'')
+
+            runner = CliRunner()
+
+            # test default arguments
+            result = runner.invoke(mlrun, [
+                '-s', 'http://127.0.0.1:8080', '--', 'echo', 'hello'])
+            self.assertEqual(result.exit_code, 0)
+            config = PatchedMLRunner.last_instance.config
+            self.assertEqual(config, MLRunnerConfig(
+                server='http://127.0.0.1:8080',
+                args=['echo', 'hello'],
+                source=MLRunnerConfig.source(
+                    copy_to_dst=False,
+                    make_archive=True,
+                ),
+                integration=MLRunnerConfig.integration(
+                    parse_stdout=True
+                )
+            ))
+
+            # test various arguments
+            os.environ['MLSTORAGE_SERVER_URI'] = 'http://127.0.0.1:8080'
+            try:
+                result = runner.invoke(mlrun, [
+                    '-C', config1,
+                    '--config-file=' + config2,
+                    '-c', 'echo hello',
+                    '-e', 'MY_ENV=abc',
+                    '--env=MY_ENV2=def',
+                    '-g', '1,2',
+                    '--gpu=3',
+                    '-n', 'test',
+                    '--description=testing',
+                    '-t', 'first',
+                    '--tags=second',
+                    '--daemon=echo hello',
+                    '-D', 'echo hi',
+                    '--no-source-archive',
+                    '--no-parse-stdout',
+                    '--copy-source',
+                ])
+                print(result)
+                self.assertEqual(result.exit_code, 0)
+                config = PatchedMLRunner.last_instance.config
+                self.assertEqual(config, MLRunnerConfig(
+                    server='http://127.0.0.1:8080',
+                    args='echo hello',
+                    env=Config(MY_ENV='abc', MY_ENV2='def'),
+                    gpu=[1, 2, 3],
+                    name='test',
+                    description='testing',
+                    tags=['first', 'second'],
+                    daemon=[
+                        'echo hello',
+                        'echo hi',
+                    ],
+                    source=MLRunnerConfig.source(
+                        copy_to_dst=True,
+                        make_archive=False,
+                    ),
+                    integration=MLRunnerConfig.integration(
+                        parse_stdout=False
+                    )
+                ))
+                config_loader = PatchedMLRunnerConfigLoader.last_instance
+                self.assertEqual(config_loader._user_config_files,
+                                 (config1, config2))
+                self.assertTrue(config_loader.loaded)
+            finally:
+                del os.environ['MLSTORAGE_SERVER_URI']
+
+            # test None exit code
+            PatchedMLRunner.exit_code = None
+            result = runner.invoke(mlrun, [
+                '-s', 'http://127.0.0.1:8080', '--', 'echo', 'hello'])
+            self.assertEqual(result.exit_code, -1)
 
 
 class StdoutParserTestCase(unittest.TestCase):
