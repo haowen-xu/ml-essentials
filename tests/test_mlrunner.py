@@ -1,15 +1,21 @@
+import copy
 import os
 import re
 import sys
+import time
 import unittest
 import zipfile
 from tempfile import TemporaryDirectory
 
 import pytest
+from bson import ObjectId
+from mock import Mock
 
-from mltk import Config, ConfigValidationError
-from mltk.mlrunner import ProgramHost, StdoutParser, MLRunnerConfig, \
-    SourceCopier, MLRunnerConfigLoader, TemporaryFileCleaner
+from mltk import Config, ConfigValidationError, MLStorageClient
+from mltk.mlrunner import (ProgramHost, StdoutParser, MLRunnerConfig,
+                           SourceCopier, MLRunnerConfigLoader,
+                           TemporaryFileCleaner, JsonFileWatcher, ExperimentDoc)
+from tests.flags import slow_test
 
 
 def get_file_content(path):
@@ -259,6 +265,7 @@ class StdoutParserTestCase(unittest.TestCase):
 
 class ProgramHostTestCase(unittest.TestCase):
 
+    @slow_test
     def test_run(self):
         def run_and_get_output(*args, **kwargs):
             with TemporaryDirectory() as temp_dir:
@@ -463,6 +470,199 @@ def zip_snapshot(path):
     return ret
 
 
+class ExperimentDocTestCase(unittest.TestCase):
+
+    maxDiff = None
+
+    def test_no_worker(self):
+        object_id = str(ObjectId())
+        client = MLStorageClient('http://127.0.0.1:8080')
+        original_doc = {
+            '_id': object_id,
+            'name': 'the name',
+            'description': 'the description',
+            'config': {'a': 1},
+            'result': {'b': 2},
+        }
+        doc = ExperimentDoc(client, original_doc)
+        self.assertIs(doc.client, client)
+        self.assertEqual(doc.value, original_doc)
+        self.assertEqual(doc.id, object_id)
+
+        # test merge_doc_updates
+        self.assertDictEqual(doc.merge_doc_updates(), original_doc)
+
+        doc.update({'name': 'xyz', 'result': {'bb': 22}})
+        doc.update({'result': {}})
+        doc.update({'webui': {'cc': '33'}, 'config': {'aa': 11}})
+        self.assertDictEqual(doc.updates, {
+            'name': 'xyz', 'result.bb': 22, 'webui.cc': '33',
+            'config': {'aa': 11}
+        })
+        self.assertDictEqual(doc.merge_doc_updates(), {
+            '_id': object_id,
+            'name': 'xyz',
+            'description': 'the description',
+            'config': {'aa': 11},
+            'result': {'b': 2, 'bb': 22},
+            'webui': {'cc': '33'},
+        })
+
+        # test set_finished
+        merged_doc = {
+            '_id': object_id,
+            'name': 'xyz',
+            'description': 'the description',
+            'config': {'aa': 11},
+            'result': {'b': 2, 'bb': 22},
+            'webui': {'cc': '33', 'ccc': '333'},
+            'exit_code': 0,
+        }
+
+        def mock_set_finished(id, status, updates):
+            self.assertEqual(id, object_id)
+            self.assertEqual(status, 'COMPLETED')
+            self.assertDictEqual(updates, {
+                'name': 'xyz', 'result.bb': 22, 'webui.cc': '33',
+                'webui.ccc': '333', 'config': {'aa': 11}, 'exit_code': 0
+            })
+            return merged_doc
+
+        client.set_finished = Mock(wraps=mock_set_finished)
+        doc.set_finished('COMPLETED', updates={
+            'exit_code': 0, 'webui': {'ccc': '333'}})
+        self.assertTrue(client.set_finished.called)
+        self.assertDictEqual(doc.value, merged_doc)
+        self.assertIsNone(doc.updates)
+
+        # test set_finished without updates
+        def mock_set_finished(id, status, updates):
+            self.assertEqual(id, object_id)
+            self.assertEqual(status, 'COMPLETED')
+            self.assertIsNone(updates)
+            return merged_doc
+
+        client.set_finished = Mock(wraps=mock_set_finished)
+        doc.set_finished('COMPLETED')
+        self.assertTrue(client.set_finished.called)
+        self.assertDictEqual(doc.value, merged_doc)
+        self.assertIsNone(doc.updates)
+
+        # test set_finished raise error
+        time_logs = []
+
+        def mock_set_finished(id, status, updates):
+            self.assertEqual(id, object_id)
+            self.assertEqual(status, 'COMPLETED')
+            self.assertIsNone(updates)
+            time_logs.append(time.time())
+            raise RuntimeError(f'This is a runtime error: {len(time_logs)}.')
+
+        client.set_finished = Mock(wraps=mock_set_finished)
+        with pytest.raises(RuntimeError, match='This is a runtime error: 4'):
+            doc.set_finished('COMPLETED', retry_intervals=(0.1, 0.2, 0.3))
+
+        self.assertEqual(client.set_finished.call_count, 4)
+        self.assertLess(abs(time_logs[1] - time_logs[0] - 0.1), 0.05)
+        self.assertLess(abs(time_logs[2] - time_logs[1] - 0.2), 0.05)
+        self.assertLess(abs(time_logs[3] - time_logs[2] - 0.3), 0.05)
+
+    @slow_test
+    def test_background_worker(self):
+        object_id = str(ObjectId())
+        client = MLStorageClient('http://127.0.0.1:8080')
+        the_doc = {
+            '_id': object_id,
+            'name': 'the name',
+            'description': 'the description',
+            'config': {'a': 1},
+            'result': {'b': 2},
+        }
+        doc = ExperimentDoc(client, the_doc.copy(), heartbeat_interval=0.1)
+
+        # test all success
+        logs = []
+
+        def mock_heartbeat(id):
+            self.assertEqual(id, object_id)
+            logs.append(time.time())
+
+        client.heartbeat = Mock(wraps=mock_heartbeat)
+
+        with doc:
+            def mock_update(id, updates):
+                self.assertEqual(id, object_id)
+                self.assertDictEqual(updates, {
+                    'config': {'aa': 11},
+                    'result.bb': 22,
+                })
+                the_doc['config'] = {'aa': 11}
+                the_doc['result'] = {'b': 2, 'bb': 22}
+                return the_doc
+
+            client.update = Mock(wraps=mock_update)
+            doc.update({'config': {'aa': 11}, 'result': {'bb': 22}})
+
+            time.sleep(0.25)
+            self.assertTrue(client.update.called)
+            self.assertDictEqual(doc.value, the_doc)
+            self.assertIsNone(doc.updates)
+
+        self.assertTrue(client.heartbeat.called)
+        self.assertLess(abs(logs[-1] - logs[-2] - 0.1), 0.05)
+
+        # test heartbeat error
+        logs = []
+
+        def mock_heartbeat(id):
+            self.assertEqual(id, object_id)
+            logs.append(time.time())
+            raise RuntimeError('error heartbeat')
+
+        client.heartbeat = Mock(wraps=mock_heartbeat)
+
+        with doc:
+            time.sleep(0.35)
+
+        self.assertGreaterEqual(len(logs), 3)
+        self.assertLessEqual(len(logs), 4)
+
+        # test update error
+        with doc:
+            expected_updates = [
+                (object_id, {
+                    'config': {'aa': 11},
+                    'result.bb': 22,
+                }),
+                (object_id, {
+                    'config': {'aaa': 111},
+                    'result.bb': 22,
+                    'result.bbb': 222,
+                })
+            ]
+            update_logs = []
+
+            def mock_update(id, updates):
+                update_logs.append((id, updates))
+                time.sleep(.15)
+                raise RuntimeError('update error')
+
+            client.update = Mock(wraps=mock_update)
+            doc.update({'config': {'aa': 11}, 'result': {'bb': 22}})
+            time.sleep(.1)
+            doc.update({'config': {'aaa': 111}, 'result': {'bbb': 222}})
+            time.sleep(.25)
+
+            self.assertTrue(client.update.call_count, 2)
+            self.assertListEqual(update_logs, expected_updates)
+
+        self.assertDictEqual(doc.updates, {
+            'config': {'aaa': 111},
+            'result.bb': 22,
+            'result.bbb': 222,
+        })
+
+
 class SourceCopierTestCase(unittest.TestCase):
 
     def test_copier(self):
@@ -496,6 +696,7 @@ class SourceCopierTestCase(unittest.TestCase):
 
             copier = SourceCopier(source_dir, dest_dir, includes, excludes)
             copier.clone_dir()
+            self.assertEqual(copier.file_count, 4)
             dest_content = dir_snapshot(dest_dir)
             dest_expected = {
                 'a.py': b'a.py',
@@ -632,5 +833,50 @@ class TemporaryFileCleanerTestCase(unittest.TestCase):
 
 class JsonFileWatcherTestCase(unittest.TestCase):
 
+    @slow_test
     def test_watcher(self):
-        pass
+        with TemporaryDirectory() as temp_dir:
+            logs = []
+            path_a = os.path.join(temp_dir, 'a.json')
+            path_b = os.path.join(temp_dir, 'b.json')
+            path_c = os.path.join(temp_dir, 'c.json')
+            os.makedirs(os.path.join(temp_dir, 'd.json'))
+
+            watcher = JsonFileWatcher(
+                root_dir=temp_dir,
+                file_names=['a.json', 'b.json', 'd.json'],
+                interval=0.1,
+            )
+
+            def on_json_updated(*args):
+                logs.append(args)
+
+            def raise_error(*args):
+                raise RuntimeError('raised error')
+
+            watcher.on_json_updated.do(on_json_updated)
+            watcher.on_json_updated.do(raise_error)
+
+            with watcher:
+                write_file_content(path_a, b'{"a": 1}')
+                write_file_content(path_c, b'{"c": 3}')
+                time.sleep(0.15)
+                write_file_content(path_b, b'{"b": 2}')
+                time.sleep(0.15)
+                self.assertListEqual(logs, [
+                    ('a.json', {'a': 1}), ('b.json', {'b': 2})
+                ])
+
+                write_file_content(path_a, b'{"a": 4}')
+                time.sleep(0.15)
+                self.assertListEqual(logs, [
+                    ('a.json', {'a': 1}), ('b.json', {'b': 2}),
+                    ('a.json', {'a': 4})
+                ])
+
+            self.assertListEqual(logs, [
+                ('a.json', {'a': 1}), ('b.json', {'b': 2}),
+                ('a.json', {'a': 4}),
+                # the forced, final check
+                ('a.json', {'a': 4}), ('b.json', {'b': 2})
+            ])

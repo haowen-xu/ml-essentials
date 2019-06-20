@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 import codecs
+import copy
 import logging
 import os
 import re
@@ -22,8 +23,8 @@ import click
 
 from .config import Config, ConfigLoader, deep_copy
 from .events import EventHost, Event
-from .mlstorage import DocumentType, MLStorageClient, IdType, json_loads, \
-    normalize_relpath
+from .mlstorage import (DocumentType, MLStorageClient, IdType, json_loads,
+                        normalize_relpath)
 from .utils import exec_proc
 
 __all__ = ['MLRunnerConfig', 'MLRunner']
@@ -61,6 +62,7 @@ class MLRunnerConfig(Config):
     """
 
     server: str = None
+    parent_id: str = None
     name: str = None
     description: str = None
     tags: List[str] = None
@@ -78,12 +80,6 @@ class MLRunnerConfig(Config):
     class source(Config):
         src_dir: str = '.'
         dst_dir: str = ''
-
-        clone: bool = False
-        cleanup: bool = True
-        pack_zip: bool = True
-        source_zip_file: str = 'source.zip'
-
         includes = [
             re.compile(r'.*\.(py|pl|rb|js|sh|r|bat|cmd|exe|jar)$')
         ]
@@ -94,6 +90,12 @@ class MLRunnerConfig(Config):
                 r'(?:$|[\\/].*)'
             )
         ]
+
+        copy_to_dst: bool = False
+        cleanup: bool = True
+
+        make_archive: bool = True
+        archive_name: str = 'source.zip'
 
         def user_validate(self):
             def maybe_compile(p):
@@ -207,9 +209,9 @@ class MLRunner(object):
         # runner default environment variables
         update_env(env, {
             'PYTHONUNBUFFERED': '1',
+            'MLSTORAGE_SERVER_URI': self.config.server,
             'MLSTORAGE_EXPERIMENT_ID': str(experiment_id),
-            'MLRUNNER_OUTPUT_DIR': output_dir,
-            'MLSTORAGE_SERVER': self.config.server,
+            'MLSTORAGE_OUTPUT_DIR': output_dir,
         })
         if self.config.env is not None:
             update_env(env, self.config.env.to_flatten_dict())
@@ -396,34 +398,52 @@ class MLRunner(object):
         json_watcher.on_json_updated.do(self._on_json_updated)
 
         # now execute the processes
+        def wrap_daemon_process(daemon):
+            proc = None
+            try:
+                with daemon.exec_proc() as p:
+                    proc = None
+                    yield daemon
+            finally:
+                if proc is not None:
+                    code = proc.poll()
+                    if code is not None:
+                        getLogger(__name__).info(f'Daemon process {daemon.pid} '
+                                                 f'exited with code: {code}')
+
         with ExitStack() as ctx_stack:
             # populate the work directory with source files
             source_copier.copy_args_files(self.config.args)
 
-            if self.config.source.clone:
+            if self.config.source.copy_to_dst:
                 ctx_stack.enter_context(source_copier)
                 getLogger(__name__).info(
-                    'Cloned source files to work directory.')
+                    f'Cloned {source_copier.file_count} source files to '
+                    f'the output directory.'
+                )
 
-            if self.config.source.pack_zip:
-                source_zip_file = os.path.join(
-                    output_dir, self.config.source.source_zip_file)
-                source_copier.pack_zip(source_zip_file)
+            if self.config.source.make_archive:
+                archive_name = os.path.join(
+                    output_dir, self.config.source.archive_name)
+                source_copier.pack_zip(archive_name)
                 getLogger(__name__).info(
-                    'Created source file archive: %s', source_zip_file)
+                    'Created source file archive: %s', archive_name)
 
             # add a temporary file cleaner
             ctx_stack.enter_context(TemporaryFileCleaner(output_dir))
+            getLogger(__name__).debug('Temporary file cleaner initialized.')
 
             # start the background json watcher
             ctx_stack.enter_context(json_watcher)
+            getLogger(__name__).debug('JSON file watcher started.')
 
             # start the daemon processes
             for daemon, daemon_args in zip(daemons, self.config.daemon):
-                daemon_proc = ctx_stack.enter_context(daemon.exec_proc())
+                daemon_proc = ctx_stack.enter_context(
+                    wrap_daemon_process(daemon))
                 getLogger(__name__).info(
-                    'Started daemon process %s: %s',
-                    daemon_proc.pid, daemon_args
+                    f'Started daemon process {daemon_proc.pid}: %s',
+                    daemon_args
                 )
 
             # run the main process
@@ -449,9 +469,15 @@ class MLRunner(object):
             if self.config[key] is not None:
                 meta[key] = self.config[key]
 
-        # name is required on some version, so if it is not specified,
-        # generate one
+        parent_id = self.config.parent_id
+        if parent_id is None:
+            parent_id = os.environ.get('MLSTORAGE_EXPERIMENT_ID', None)
+        if parent_id is not None:
+            meta['parent_id'] = parent_id
+
         if 'name' not in meta:
+            # name is required on some version, so if it is not specified,
+            # generate one
             if isinstance(self.config.args, (str, bytes)):
                 meta['name'] = self.config.args
             else:
@@ -536,36 +562,43 @@ class MLRunner(object):
 
 
 @click.command()
-@click.option('-n', '--name', required=False, default=None,
-              help='Experiment name.')
-@click.option('-d', '--description', required=False, default=None,
-              help='Experiment description.')
-@click.option('-t', '--tags', required=False, multiple=True,
-              help='Experiment tags, comma separated strings, e.g. '
-                   '"prec 0.996, state of the arts".')
 @click.option('-C', '--config-file', required=False, multiple=True,
               help='Load runner configuration from JSON or YAML file. '
                    'Values from all config files will be merged. '
                    'The CLI arguments will override all config files.')
+@click.option('-n', '--name', required=False, default=None,
+              help='Experiment name.')
+@click.option('-d', '--description', required=False, default=None,
+              help='Experiment description.')
+@click.option('-t', '--tags', required=False, multiple=True, default=None,
+              help='Experiment tags, comma separated strings, e.g. '
+                   '"prec 0.996, state of the arts".')
 @click.option('-e', '--env', required=False, multiple=True,
               help='Environmental variable (FOO=BAR).')
 @click.option('-g', '--gpu', required=False, multiple=True,
               help='Quick approach to set the "CUDA_VISIBLE_DEVICES" '
                    'environmental variable.')
+@click.option('-w', '--work-dir', required=False, default=None,
+              help='Use this work directory, instead of using the MLStorage '
+                   'output dir.')
 @click.option('-s', '--server', required=False,
-              default=os.environ.get('MLSTORAGE_SERVER', '') or None,
+              default=os.environ.get('MLSTORAGE_SERVER_URI', '') or None,
               help='Specify the URI of MLStorage API server, e.g., '
                    '"http://localhost:8080".  If not specified, will use '
-                   '``os.environ["MLSTORAGE_SERVER"]``.')
+                   '``os.environ["MLSTORAGE_SERVER_URI"]``.')
 @click.option('--copy-source/--no-copy-source',  'copy_source',
               is_flag=True, default=None, required=False,
               help='Whether or not to copy the source files from current '
                    'directory to MLStorage output directory?')
-@click.option('--pack-zip/--no-pack-zip', 'pack_zip', is_flag=True,
-              default=None, required=False,
+@click.option('--source-archive/--no-source-archive', 'source_archive',
+              is_flag=True, default=None, required=False,
               help='Whether or not to pack the source files from the current '
                    'directory into a zip archive in the MLStorage output '
                    'directory?')
+@click.option('--parse-stdout/--no-parse-stdout', 'parse_stdout',
+              is_flag=True, required=False, default=None,
+              help='Whether or not to parse the output of experiment and '
+                   'daemon processes?')
 @click.option('-D', '--daemon', required=False, multiple=True,
               help='Specify the shell command of daemon processes, to be '
                    'executed along with the main experiment process.')
@@ -573,8 +606,8 @@ class MLRunner(object):
               help='Specify the shell command to execute. '
                    'Will override the program arguments (args).')
 @click.argument('args', nargs=-1)
-def mlrun(name, description, tags, config_file, env, gpu, server, copy_source,
-          pack_zip, daemon, command, args):
+def mlrun(config_file, name, description, tags, env, gpu, work_dir, server,
+          copy_source, source_archive, parse_stdout, daemon, command, args):
     """
     Run an experiment.
 
@@ -597,8 +630,8 @@ def mlrun(name, description, tags, config_file, env, gpu, server, copy_source,
 
         *.py *.pl *.rb *.js *.sh *.r *.bat *.cmd *.exe *.jar
 
-    The source files will also be collected into
-    "<MLStorage output dir>/source.zip", unless you specify "--no-pack-zip".
+    The source files will be collected into "<MLStorage output dir>/source.zip",
+    unless you specify "--no-source-archive".
 
     During the execution of the program, the STDOUT and STDERR of the program
     will be captured and stored in "<MLStorage output dir>/console.log".
@@ -673,12 +706,14 @@ def mlrun(name, description, tags, config_file, env, gpu, server, copy_source,
     cli_config = {
         'name': name,
         'description': description,
-        'tags': tags,
+        'tags': tags or None,
         'env': env_dict,
         'gpu': gpu_list,
+        'work_dir': work_dir,
         'server': server,
-        'source.clone': copy_source,
-        'source.pack_zip': pack_zip,
+        'source.copy_to_dst': copy_source,
+        'source.source_archive': source_archive,
+        'integration.parse_stdout': parse_stdout,
         'daemon': daemon,
         'args': command or args,
     }
@@ -1146,7 +1181,7 @@ class ExperimentDoc(object):
     def __init__(self,
                  client: MLStorageClient,
                  value: DocumentType,
-                 heartbeat_interval: int = 120):
+                 heartbeat_interval: float = 120):
         """
         Construct a new :class:`ExperimentDoc`.
 
@@ -1180,7 +1215,7 @@ class ExperimentDoc(object):
     @property
     def id(self) -> IdType:
         """Get the experiment id."""
-        return self._value['id']
+        return self._value['_id']
 
     @property
     def updates(self) -> Optional[DocumentType]:
@@ -1228,15 +1263,14 @@ class ExperimentDoc(object):
 
             self._updates = updates
 
-            if not self._stopped:
-                with self._wait_cond:
-                    self._wait_cond.notify_all()
+        with self._wait_cond:
+            self._wait_cond.notify_all()
 
     def set_finished(self,
                      status: str,
                      updates: Optional[DocumentType] = None,
-                     retry_intervals: Sequence[int] = (10, 20, 30, 50, 80,
-                                                       130, 210)):
+                     retry_intervals: Sequence[float] = (10, 20, 30, 50, 80,
+                                                         130, 210)):
         """
         Set the experiment to be finished.
 
@@ -1290,13 +1324,14 @@ class ExperimentDoc(object):
                 self._value = self.client.update(self.id, updates)
             except Exception:
                 # failed to save the updates, so we re-queue the updates
-                with self._update_lock:
-                    if self._updates is None:
-                        self._updates = updates
-                    else:
-                        for key, val in updates.items():
-                            if key not in self._updates:
-                                self._updates[key] = val
+                if updates:
+                    with self._update_lock:
+                        if self._updates is None:
+                            self._updates = copy.deepcopy(updates)
+                        else:
+                            for key, val in updates.items():
+                                if key not in self._updates:
+                                    self._updates[key] = val
 
                 getLogger(__name__).warning(
                     'Failed to save the document of experiment %s',
@@ -1343,6 +1378,13 @@ class ExperimentDoc(object):
             self._thread.join()
             self._thread = None
 
+    def __enter__(self):
+        self.start_worker()
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.stop_worker()
+
 
 class SourceCopier(object):
     """Class to clone source files to destination directory."""
@@ -1367,6 +1409,10 @@ class SourceCopier(object):
         self._excludes = excludes
         self._created_dirs = []
         self._copied_files = []
+
+    @property
+    def file_count(self) -> int:
+        return len(self._copied_files)
 
     def _walk(self, dir_callback, file_callback):
         def walk(src, relpath):
@@ -1571,9 +1617,20 @@ class TemporaryFileCleaner(object):
 
 
 class JsonFileWatcher(object):
+    """
+    Class to watch the changes of JSON files.
+    """
 
     def __init__(self, root_dir: str, file_names: Iterable[str],
-                 interval: int = 120):
+                 interval: float = 120):
+        """
+        Construct a new :class:`JsonFileWatcher`.
+
+        Args:
+            root_dir: Root directory of the files.
+            file_names: Names of the files.
+            interval: Check interval in seconds.
+        """
         self._root_dir = root_dir
         self._file_names = tuple(file_names)
         self._last_check = {}
@@ -1636,8 +1693,8 @@ class JsonFileWatcher(object):
                     with codecs.open(path, 'rb', 'utf-8') as f:
                         content = json_loads(f.read())
                     getLogger(__name__).debug('JSON content updated: %s', path)
-                    self.on_json_updated.fire(name, content)
                     self._last_check[name] = (st.st_size, st.st_mtime)
+                    self.on_json_updated.fire(name, content)
 
             except IOError:
                 getLogger(__name__).debug(
@@ -1683,3 +1740,9 @@ class JsonFileWatcher(object):
             self.stop_worker()
         finally:
             self.check_files(force=True)
+
+
+class ControlServer(object):
+
+    def __init__(self):
+        pass
