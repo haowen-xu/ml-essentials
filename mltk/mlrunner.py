@@ -6,6 +6,7 @@ import os
 import re
 import shlex
 import shutil
+import signal
 import socket
 import stat
 import subprocess
@@ -15,7 +16,9 @@ import traceback
 import typing
 import zipfile
 from contextlib import contextmanager, ExitStack
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from logging import getLogger, FileHandler
+from socketserver import ThreadingMixIn
 from threading import RLock, Condition, Thread
 from typing import *
 
@@ -25,7 +28,7 @@ from .config import Config, ConfigLoader, deep_copy
 from .events import EventHost, Event
 from .mlstorage import (DocumentType, MLStorageClient, IdType, json_loads,
                         normalize_relpath)
-from .utils import exec_proc
+from .utils import exec_proc, timed_wait_proc
 
 __all__ = ['MLRunnerConfig', 'MLRunner']
 
@@ -364,7 +367,7 @@ class MLRunner(object):
 
         # create the program host for the main process
         log_file = os.path.join(output_dir, self.config.logging.log_file)
-        main_proc = ProgramHost(
+        main_host = ProgramHost(
             args=self.config.args,
             env=env,
             work_dir=work_dir,
@@ -413,6 +416,10 @@ class MLRunner(object):
             ]
         )
         json_watcher.on_json_updated.do(self._on_json_updated)
+
+        # initialize the control server
+        control_server = ControlServer()
+        control_server.on_kill.do(main_host.kill)
 
         # now execute the processes
         @contextmanager
@@ -466,16 +473,22 @@ class MLRunner(object):
                     )
 
             # run the main process
-            with main_proc.exec_proc() as proc:
+            with main_host.exec_proc() as proc, \
+                    control_server.run_in_background():
                 getLogger(__name__).info(
                     'Started experiment process %s: %s',
                     proc.pid, self.config.args
                 )
+                getLogger(__name__).info(
+                    'Control server started at: %s', control_server.uri)
 
                 # update the doc with execution info
                 self.doc.update({
                     'exc_info': {
                         'pid': proc.pid,
+                    },
+                    'control_port': {
+                        'kill': control_server.uri + '/kill',
                     }
                 })
 
@@ -1118,6 +1131,31 @@ class ProgramHost(object):
         self._log_parser = log_parser
         self._log_file = log_file
         self._append_to_file = append_to_file
+        self._proc = None  # type: subprocess.Popen
+
+    @property
+    def proc(self) -> subprocess.Popen:
+        """Get the managed process object."""
+        return self._proc
+
+    def kill(self, ctrl_c_timeout: float = 3):
+        """
+        Kill the process if it is running.
+
+        This method will first try to interrupt the process by Ctrl+C.
+        If the process does not exit in `ctrl_c_timeout` seconds, then
+        it will kill the process by SIGKILL (or terminate on windows).
+        """
+        if self.proc is not None and self.proc.poll() is None:
+            ctrl_c_signal = (signal.SIGINT if sys.platform != 'win32'
+                             else signal.CTRL_C_EVENT)
+            try:
+                self.proc.send_signal(ctrl_c_signal)
+                if timed_wait_proc(self.proc, ctrl_c_timeout) is None:
+                    self.proc.kill()
+            except ProcessLookupError:  # pragma: no cover
+                # which indicates the process has exited
+                pass
 
     @contextmanager
     def exec_proc(self) -> Generator[subprocess.Popen, None, None]:
@@ -1187,6 +1225,7 @@ class ProgramHost(object):
                            stderr_to_stdout=True,
                            env=env,
                            cwd=self._work_dir) as proc:
+                self._proc = proc
                 yield proc
         finally:
             if close_log_file:
@@ -1792,7 +1831,78 @@ class JsonFileWatcher(object):
             self.check_files(force=True)
 
 
-class ControlServer(object):
+class ControlServerHandler(BaseHTTPRequestHandler):
 
-    def __init__(self):
-        pass
+    def do_GET(self):
+        self.send_error(404, 'Not Found')
+
+    def do_POST(self):
+        if self.path == '/kill':
+            self.handle_kill()
+        else:
+            self.send_error(404, 'Not Found')
+
+    def handle_kill(self):
+        try:
+            self.server.on_kill.fire()
+
+            self.send_response(200, 'Ok')
+            self.send_header('Content-Type', 'application/json')
+            self.send_header('Content-Length', 2)
+            self.end_headers()
+            self.wfile.write(b'{}')
+        except Exception as ex:
+            getLogger(__name__).warning(
+                'Failed to kill the process.', exc_info=True)
+            self.send_error(500, 'Failed to kill the process.')
+
+
+class ControlServer(HTTPServer, ThreadingMixIn):
+    """
+    A server that exposes control APIs on the experiment process.
+    """
+
+    def __init__(self, host='', port=0):
+        """
+        Construct a new :class:`ControlPortServer`.
+
+        Args:
+            host: The host to bind.
+            port: The port to bind.
+        """
+        super(ControlServer, self).__init__(
+            (host, port), ControlServerHandler)
+        self._host = host
+        self._port = port
+        self._events = EventHost()
+        self._on_kill = self.events['on_kill']
+
+    @property
+    def events(self) -> EventHost:
+        """Get the event host."""
+        return self._events
+
+    @property
+    def on_kill(self) -> Event:
+        """Get the event that kill request is received."""
+        return self._on_kill
+
+    @property
+    def uri(self) -> str:
+        """Get the URI of the server."""
+        host = (self._host if self._host not in ('', '0.0.0.0')
+                else socket.gethostname())
+        port = self.socket.getsockname()[1]
+        return f'http://{host}:{port}'
+
+    @contextmanager
+    def run_in_background(self):
+        """Run the server in background."""
+        th = Thread(target=self.serve_forever)
+        try:
+            th.daemon = True
+            th.start()
+            yield self
+        finally:
+            self.shutdown()
+            th.join()

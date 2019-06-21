@@ -2,6 +2,8 @@
 
 import os
 import re
+
+import requests
 import socket
 import stat
 import sys
@@ -22,7 +24,7 @@ from mltk import Config, ConfigValidationError, MLStorageClient
 from mltk.mlrunner import (ProgramHost, StdoutParser, MLRunnerConfig,
                            SourceCopier, MLRunnerConfigLoader,
                            TemporaryFileCleaner, JsonFileWatcher, ExperimentDoc,
-                           MLRunner, mlrun)
+                           MLRunner, mlrun, ControlServer)
 from mltk.mlstorage import json_dumps, json_loads
 from tests.flags import slow_test
 
@@ -464,7 +466,8 @@ class MLRunnerTestCase(unittest.TestCase):
                     ],
                     daemon=[
                         ['echo', 'daemon 1'],
-                        'python -m http.server 12367',
+                        'echo "Serving HTTP on 0.0.0.0 port 12367 '
+                        '(http://0.0.0.0:12367/)"',
                         'env',
                     ],
                     env=Config(MY_ENV='abc'),
@@ -502,6 +505,10 @@ class MLRunnerTestCase(unittest.TestCase):
                 self.assertEqual(exc_info['env']['CUDA_VISIBLE_DEVICES'], '1,2')
                 self.assertIn(output_dir, exc_info['env']['PYTHONPATH'])
                 self.assertIn(source_root, exc_info['env']['PYTHONPATH'])
+
+                control_port = doc.pop('control_port')
+                self.assertIsInstance(control_port, dict)
+                self.assertTrue(control_port['kill'].startswith('http://'))
 
                 self.assertDictEqual(doc, {
                     'name': config.name,
@@ -1118,6 +1125,62 @@ class ProgramHostTestCase(unittest.TestCase):
                 os.close(log_fileno)
             self.assertEqual(get_file_content(log_file), b'goodbye\n')
 
+    @slow_test
+    def test_kill(self):
+        with TemporaryDirectory() as temp_dir:
+            # test kill by SIGINT
+            host = ProgramHost(
+                [
+                    'python',
+                    '-u', '-c',
+                    'import time, sys\n'
+                    'for i in range(100):\n'
+                    '  sys.stdout.write(str(i) + "\\n")\n'
+                    '  sys.stdout.flush()\n'
+                    '  time.sleep(0.1)\n'
+                ]
+            )
+
+            with host.exec_proc() as proc:
+                time.sleep(0.5)
+                start_time = time.time()
+                host.kill(ctrl_c_timeout=0.5)
+                stop_time = time.time()
+
+            host.kill()
+            code = proc.wait()
+            self.assertNotEqual(code, 0)
+            self.assertLess(abs(stop_time - start_time), 0.05)
+
+            # test kill by SIGKILL
+            log_file = os.path.join(temp_dir, 'console.log')
+            host = ProgramHost(
+                [
+                    'python',
+                    '-u', '-c',
+                    'import sys, time\n'
+                    'while True:\n'
+                    '  try:\n'
+                    '    time.sleep(0.1)\n'
+                    '  except KeyboardInterrupt:\n'
+                    '    sys.stdout.write("kbd interrupt\\n")\n'
+                    '    sys.stdout.flush()\n'
+                ],
+                log_file=log_file
+            )
+
+            with host.exec_proc() as proc:
+                time.sleep(0.5)
+                start_time = time.time()
+                host.kill(ctrl_c_timeout=0.5)
+                stop_time = time.time()
+
+            host.kill()
+            code = proc.wait()
+            self.assertNotEqual(code, 0)
+            self.assertEqual(get_file_content(log_file), b'kbd interrupt\n')
+            self.assertLess(abs(stop_time - start_time - 0.5), 0.05)
+
 
 class ExperimentDocTestCase(unittest.TestCase):
 
@@ -1533,3 +1596,39 @@ class JsonFileWatcherTestCase(unittest.TestCase):
                 # the forced, final check
                 ('a.json', {'a': 4}), ('b.json', {'b': 2})
             ])
+
+
+class ControlPortServerTestCase(unittest.TestCase):
+
+    def test_server(self):
+        server = ControlServer('127.0.0.1', 12379)
+        self.assertEqual(server.uri, 'http://127.0.0.1:12379')
+
+        server = ControlServer()
+        logs = []
+
+        with server.run_in_background():
+            # test not found
+            r = requests.get(server.uri)
+            self.assertEqual(r.status_code, 404)
+
+            r = requests.post(server.uri, data=b'')
+            self.assertEqual(r.status_code, 404)
+
+            # test kill
+            server.on_kill.do(lambda: logs.append('on kill'))
+            self.assertListEqual(logs, [])
+            r = requests.post(server.uri + '/kill', json={})
+            self.assertEqual(r.status_code, 200)
+            self.assertEqual(r.content, b'{}')
+            self.assertEqual(r.headers['Content-Type'].split(';', 1)[0],
+                             'application/json')
+            self.assertListEqual(logs, ['on kill'])
+
+            # test kill but error
+            def on_kill_error():
+                raise RuntimeError('error on kill')
+
+            server.on_kill.do(on_kill_error)
+            r = requests.post(server.uri + '/kill', json={})
+            self.assertEqual(r.status_code, 500)

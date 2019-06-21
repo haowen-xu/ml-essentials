@@ -11,7 +11,7 @@ __all__ = ['timed_wait_proc', 'exec_proc']
 OutputCallbackType = Callable[[bytes], None]
 
 
-def timed_wait_proc(proc: subprocess.Popen, timeout: int) -> Optional[int]:
+def timed_wait_proc(proc: subprocess.Popen, timeout: float) -> Optional[int]:
     """
     Wait a process for at most `timeout` seconds.
 
