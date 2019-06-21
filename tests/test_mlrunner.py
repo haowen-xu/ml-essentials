@@ -550,13 +550,18 @@ class MLRunnerTestCase(unittest.TestCase):
                                  b'{"acc": 0.99}\n')
                 self.assertEqual(output_snapshot['webui.json'],
                                  b'{"TB": "http://tb:7890"}\n')
+
                 self.assertEqual(output_snapshot['daemon.0.log'],
                                  b'daemon 1\n')
                 self.assertTrue(output_snapshot['daemon.1.log'].startswith(
                     b'Serving HTTP on 0.0.0.0 port 12367 '
                     b'(http://0.0.0.0:12367/)'
                 ))
+
                 self.assertIn(b'MY_ENV=abc\n', output_snapshot['daemon.2.log'])
+                self.assertIn(b'PYTHONUNBUFFERED=1\n',
+                              output_snapshot['daemon.2.log'])
+
                 self.assertEqual(output_snapshot['a.py'], b'print("a.py")\n')
                 self.assertDictEqual(output_snapshot['nested'], {
                     'b.sh': b'echo "b.sh"\n',
@@ -889,6 +894,7 @@ class MLRunTestCase(unittest.TestCase):
                     '--tags=second',
                     '--daemon=echo hello',
                     '-D', 'echo hi',
+                    '--tensorboard',
                     '--no-source-archive',
                     '--no-parse-stdout',
                     '--copy-source',
@@ -907,6 +913,7 @@ class MLRunTestCase(unittest.TestCase):
                     daemon=[
                         'echo hello',
                         'echo hi',
+                        'tensorboard --logdir=.',
                     ],
                     source=MLRunnerConfig.source(
                         copy_to_dst=True,
@@ -995,16 +1002,6 @@ class ProgramHostTestCase(unittest.TestCase):
         host = ProgramHost(['sh', '-c', 'exit 123'],
                            log_to_stdout=False)
         self.assertEqual(host.run(), 123)
-
-        # test shell command
-        if sys.platform == 'win32':
-            cmd = 'echo %PYTHONUNBUFFERED%'
-        else:
-            cmd = 'echo $PYTHONUNBUFFERED'
-
-        code, output = run_and_get_output(cmd)
-        self.assertEqual(code, 0)
-        self.assertEqual(output, b'1\n')
 
         # test environment dict
         code, output = run_and_get_output(
