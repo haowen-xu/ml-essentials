@@ -13,6 +13,7 @@ class StatefulObjectTestCase(unittest.TestCase):
     def test_object_group(self):
         a = SimpleStatefulObject()
         b = SimpleStatefulObject()
+        c = SimpleStatefulObject()
 
         # test argument validation
         with pytest.raises(ValueError,
@@ -38,6 +39,24 @@ class StatefulObjectTestCase(unittest.TestCase):
         with pytest.raises(ValueError,
                            match='invalid state key \'a\': no "."'):
             obj.set_state_dict({'a': 0xdeadbeef})
+
+        # test add object
+        obj = StatefulObjectGroup({'a': a, 'b': b})
+        a.value = 123
+        b.value = 456
+        c.value = 789
+
+        with pytest.raises(ValueError,
+                           match='`prefix` already exists: \'a\''):
+            obj.add_object('a', c)
+
+        with pytest.raises(TypeError,
+                           match='`obj` is not a StatefulObject: <object.*>'):
+            obj.add_object('c', object())
+
+        obj.add_object('c', c)
+        self.assertEqual(obj.get_state_dict(),
+                         {'a.value': 123, 'b.value': 456, 'c.value': 789})
 
         # strict mode, should raise error in the following two cases
         obj = StatefulObjectGroup({'a': a, 'b': b}, strict=True)
