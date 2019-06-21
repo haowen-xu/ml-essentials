@@ -32,7 +32,7 @@ from .utils import exec_proc, timed_wait_proc
 
 __all__ = ['MLRunnerConfig', 'MLRunner']
 
-LOG_LEVEL = 'DEBUG'
+LOG_LEVEL = 'INFO'
 LOG_FORMAT = '%(asctime)s [%(levelname)-8s] %(message)s'
 
 PatternType = getattr(typing, 'Pattern', getattr(re, 'Pattern', Any))
