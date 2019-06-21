@@ -504,7 +504,7 @@ class ValidatorTestCase(unittest.TestCase):
 
     def test_CustomValidator(self):
         v = CustomValidator(int)
-        self.assertEquals(repr(v), "CustomValidator(<class 'int'>)")
+        self.assertEqual(repr(v), "CustomValidator(<class 'int'>)")
         self.assertEqual(v.validate('123'), 123)
 
     def test_IntValidator(self):

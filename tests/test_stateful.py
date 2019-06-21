@@ -21,8 +21,8 @@ class StatefulObjectTestCase(unittest.TestCase):
             _ = StatefulObjectGroup({'': a})
 
         with pytest.raises(ValueError,
-                           match='invalid key \'a\.\': must be a non-empty str '
-                                 'without "."'):
+                           match='invalid key \'a\\.\': must be a non-empty '
+                                 'str without "\\."'):
             _ = StatefulObjectGroup({'a.': a})
 
         with pytest.raises(TypeError,

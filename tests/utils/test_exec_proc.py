@@ -22,7 +22,7 @@ class TimedWaitTestCase(unittest.TestCase):
         wait_time = -time.time()
         proc = subprocess.Popen(
             [sys.executable, '-c', 'import sys; sys.exit(123)'])
-        self.assertEquals(123, timed_wait_proc(proc, 1.5))
+        self.assertEqual(123, timed_wait_proc(proc, 1.5))
         wait_time += time.time()
         self.assertLess(wait_time, 1.)
 
@@ -102,8 +102,8 @@ class ExcProcTestCase(unittest.TestCase):
                 ['python', '-u', '-c', interruptable],
                 on_stdout=stdout.write) as proc:
             timed_wait_proc(proc, 1.)
-        self.assertEquals(b'kbd interrupt\nexited\n', stdout.getvalue())
-        self.assertEquals(0, proc.poll())
+        self.assertEqual(b'kbd interrupt\nexited\n', stdout.getvalue())
+        self.assertEqual(0, proc.poll())
 
         # test non-interruptable, give up waiting
         stdout = io.BytesIO()
@@ -112,5 +112,5 @@ class ExcProcTestCase(unittest.TestCase):
                 on_stdout=stdout.write,
                 ctrl_c_timeout=1) as proc:
             timed_wait_proc(proc, 1.)
-        self.assertEquals(b'kbd interrupt\n', stdout.getvalue())
-        self.assertNotEquals(0, proc.poll())
+        self.assertEqual(b'kbd interrupt\n', stdout.getvalue())
+        self.assertNotEqual(0, proc.poll())

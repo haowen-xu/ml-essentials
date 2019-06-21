@@ -845,7 +845,7 @@ class ConfigLoader(Generic[TConfig]):
             self.load_object(obj)
 
     def load_yaml(self, path: Union[str, bytes, PathLike],
-                  Loader=yaml.Loader) -> TConfig:
+                  Loader=yaml.SafeLoader) -> TConfig:
         """
         Load config from a YAML file.
 
@@ -910,7 +910,7 @@ class ConfigLoader(Generic[TConfig]):
                             isinstance(self._validator, FieldValidator) and
                             self._validator.sub_validator is None):
                         try:
-                            value = yaml.load(values)
+                            value = yaml.load(values, Loader=yaml.SafeLoader)
                         except yaml.YAMLError:
                             value = str(values)
                     else:

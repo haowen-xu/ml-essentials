@@ -5,6 +5,10 @@
 
 A set of essential toolkits for daily machine learning experiments.
 
+## Requirements
+
+* Python >= 3.6
+
 ## Installation
 
 ```bash
@@ -15,7 +19,7 @@ pip install git+https://github.com/haowen-xu/ml-essentials.git
 
 ### MLRunner
 
-You may run an experiment with ML Runner, such that its information and output
+You may run an experiment with the MLRunner, such that its information and output
 can be saved via [MLStorage Server](https://github.com/haowen-xu/mlstorage-server).
 
 ```bash
