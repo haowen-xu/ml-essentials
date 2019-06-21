@@ -510,6 +510,7 @@ class MLRunnerTestCase(unittest.TestCase):
                 self.assertIsInstance(control_port, dict)
                 self.assertTrue(control_port['kill'].startswith('http://'))
 
+                hostname = socket.gethostname()
                 self.assertDictEqual(doc, {
                     'name': config.name,
                     '_id': doc["_id"],
@@ -524,7 +525,7 @@ class MLRunnerTestCase(unittest.TestCase):
                     'status': 'COMPLETED',
                     'config': {'max_epoch': 123},
                     'default_config': {'max_epoch': 100},
-                    'webui': {'SimpleHTTP': 'http://0.0.0.0:12367/',
+                    'webui': {'SimpleHTTP': f'http://{hostname}:12367/',
                               'TB': 'http://tb:7890'},
                 })
 

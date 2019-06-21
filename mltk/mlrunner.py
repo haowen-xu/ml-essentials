@@ -21,6 +21,7 @@ from logging import getLogger, FileHandler
 from socketserver import ThreadingMixIn
 from threading import RLock, Condition, Thread
 from typing import *
+from urllib.parse import urlsplit, urlunsplit, SplitResult
 
 import click
 
@@ -324,7 +325,31 @@ class MLRunner(object):
 
     def _on_webui_log(self, info):
         if info:
-            self.doc.update({'webui': info})
+            def get_hostname_cached():
+                if _cache[0] is None:
+                    _cache[0] = socket.gethostname()
+                return _cache[0]
+            _cache = [None]  # type: List[str]
+
+            webui = {}
+            for key, val in info.items():
+                webui[key] = val
+                try:
+                    u = urlsplit(val)
+                except Exception as ex:  # pragma: no cover
+                    pass
+                else:
+                    if u.scheme in ('http', 'https'):
+                        parts = u.netloc.rsplit(':', 1)
+                        if parts[0] in ('0.0.0.0', '[::0]'):
+                            parts[0] = get_hostname_cached()
+                            u = SplitResult(
+                                scheme=u.scheme, netloc=':'.join(parts),
+                                path=u.path, query=u.query, fragment=u.fragment
+                            )
+                            webui[key] = urlunsplit(u)
+
+            self.doc.update({'webui': webui})
 
     def _create_log_parser(self):
         parser = StdoutParser()
