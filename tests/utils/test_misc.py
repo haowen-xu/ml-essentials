@@ -1,7 +1,6 @@
 import unittest
 
 import numpy as np
-import pytest
 
 from mltk.utils import *
 
@@ -147,9 +146,3 @@ class ETATestCase(unittest.TestCase):
         eta.take_snapshot(0., 0)
         # progress is too small for estimating the ETA
         self.assertIsNone(eta.get_eta(5e-8, 1.))
-
-    def test_format_key_values(self):
-        with pytest.raises(ValueError,
-                           match='`delimiter_char` must be one character: '
-                                 'got \'xx\''):
-            format_key_values({'a': 1}, delimiter_char='xx')

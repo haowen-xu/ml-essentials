@@ -6,9 +6,9 @@ import zipfile
 from tempfile import TemporaryDirectory
 from typing import *
 
-from .config import Config, ConfigLoader, NOT_SET
+from .config import Config, ConfigLoader
 from .events import EventHost, Event
-from .utils import make_dir_archive, json_dumps, json_loads
+from .utils import NOT_SET, make_dir_archive, json_dumps, json_loads
 
 __all__ = ['Experiment']
 
@@ -85,8 +85,7 @@ class Experiment(Generic[TConfig]):
                  output_dir: Optional[str] = None,
                  load_config_file: bool = True,
                  save_config_file: bool = True,
-                 load_args: bool = True,
-                 args: Optional[Iterable[str]] = None):
+                 args: Optional[Iterable[str]] = NOT_SET):
         """
         Construct a new :class:`Experiment`.
 
@@ -101,9 +100,8 @@ class Experiment(Generic[TConfig]):
                 values from `output_dir + "/config.json"`?
             save_config_file: Whether or not to save configuration
                 values into `output_dir + "/config.json"`?
-            load_args: Whether or not to load configuration values from
-                CLI arguments?
             args: The CLI arguments.  If not specified, use ``sys.argv[1:]``.
+                Specifying :obj:`None` will disable parsing the arguments.
         """
         # validate the arguments
         config_or_cls_okay = True
@@ -134,6 +132,8 @@ class Experiment(Generic[TConfig]):
             output_dir = f'./results/{script_name}'
         output_dir = os.path.abspath(output_dir)
 
+        if args is NOT_SET:
+            args = sys.argv[1:]
         if args is not None:
             args = tuple(map(str, args))
 
@@ -143,7 +143,6 @@ class Experiment(Generic[TConfig]):
         self._config = config
         self._load_config_file = load_config_file
         self._save_config_file = save_config_file
-        self._load_args = load_args
         self._args = args
 
         # internal state of experiment
@@ -175,7 +174,7 @@ class Experiment(Generic[TConfig]):
         return self._output_dir
 
     @property
-    def args(self) -> Tuple[str]:
+    def args(self) -> Optional[Tuple[str]]:
         """Get the CLI arguments of this experiment."""
         return self._args
 
@@ -234,7 +233,7 @@ class Experiment(Generic[TConfig]):
         default config values into `output_dir + "/config.defaults.json"`.
         """
         config_json = json_dumps(self.config.to_flatten_dict())
-        default_config_json = json_dumps(self.config.defaults_dict())
+        default_config_json = json_dumps(self.config.defaults_flatten_dict())
 
         with codecs.open(os.path.join(self.output_dir, 'config.json'),
                          'wb', 'utf-8') as f:
@@ -257,7 +256,7 @@ class Experiment(Generic[TConfig]):
                     old_result = json_loads(result_json)
                     assert(isinstance(old_result, dict))
 
-            except Exception:
+            except Exception:  # pragma: no cover
                 raise IOError('Cannot load the existing old result.')
 
         # merge the new result with the old result
@@ -314,7 +313,7 @@ class Experiment(Generic[TConfig]):
         os.makedirs(path, exist_ok=exist_ok)
         return path
 
-    def make_parents(self, relpath: str, exist_ok: bool = True) -> str:
+    def make_parent(self, relpath: str, exist_ok: bool = True) -> str:
         """
         Create the parent directory of `relpath` (and its ancestors if
         necessary) in `output_dir`.
@@ -334,7 +333,7 @@ class Experiment(Generic[TConfig]):
         return path
 
     def open_file(self, relpath: str, mode: str, encoding: Optional[str] = None,
-                  make_parents: bool = True):
+                  make_parent: bool = NOT_SET):
         """
         Open a file at `relpath` in `output_dir`.
 
@@ -343,14 +342,18 @@ class Experiment(Generic[TConfig]):
             mode: The open mode.
             encoding: The text encoding.  If not specified, will open the file
                 in binary mode; otherwise will open it in text mode.
-            make_parents: If :obj:`True`, will create the parent (and all
-                ancestors) of `relpath` if necessary.
+            make_parent: If :obj:`True`, will create the parent (and all
+                ancestors) of `relpath` if necessary.  By default, will
+                create the parent if open the file by writable mode.
 
         Returns:
             The opened file.
         """
-        if make_parents:
-            path = self.make_parents(relpath)
+        if make_parent is NOT_SET:
+            make_parent = any(s in mode for s in 'aw+')
+
+        if make_parent:
+            path = self.make_parent(relpath)
         else:
             path = self.abspath(relpath)
 
@@ -358,6 +361,41 @@ class Experiment(Generic[TConfig]):
             return open(path, mode)
         else:
             return codecs.open(path, mode, encoding)
+
+    def put_file_content(self,
+                         relpath: str,
+                         content: Union[bytes, str],
+                         append: bool = False,
+                         encoding: Optional[str] = None):
+        """
+        Save content into a file.
+
+        Args:
+            relpath: The relative path of the file.
+            content: The file content.  Must be bytes if `encoding` is not
+                specified, while text if `encoding` is specified.
+            append: Whether or not to append to the file?
+            encoding: The text encoding.
+        """
+        with self.open_file(relpath, 'ab' if append else 'wb',
+                            encoding=encoding) as f:
+            f.write(content)
+
+    def get_file_content(self, relpath: str, encoding: Optional[str] = None
+                         ) -> Union[bytes, str]:
+        """
+        Get the content of a file.
+
+        Args:
+            relpath: The relative path of a file.
+            encoding: The text encoding.  If specified, will decode the
+                file content using this encoding.
+
+        Returns:
+            The file content.
+        """
+        with self.open_file(relpath, 'rb', encoding=encoding) as f:
+            return f.read()
 
     def make_archive(self,
                      source_dir: str,
@@ -375,6 +413,9 @@ class Experiment(Generic[TConfig]):
                 If not specified, will use `source_dir + ".zip"`.
             delete_source: Whether or not to delete `source_dir` after
                 the zip archive has been created?
+
+        Returns:
+            The absolute path of the archive file.
         """
         def _copy_dir(src: str, dst: str):
             os.makedirs(dst, exist_ok=True)
@@ -425,6 +466,8 @@ class Experiment(Generic[TConfig]):
         if delete_source:
             shutil.rmtree(source_dir)
 
+        return archive_file
+
     def make_archive_on_exit(self,
                              source_dir: str,
                              archive_file: Optional[str] = None,
@@ -452,19 +495,26 @@ class Experiment(Generic[TConfig]):
         config_loader = ConfigLoader(self.config)
 
         # build the argument parser
-        arg_parser = config_loader.build_arg_parser()
-        arg_parser.add_argument(
-            '--output-dir', help='Specify the experiment output directory.',
-            default=NOT_SET
-        )
-        args = self._args if self._args is not None else sys.argv[1:]
-        parsed_args = arg_parser.parse_args(args)
+        if self.args is not None:
+            arg_parser = config_loader.build_arg_parser()
+            arg_parser.add_argument(
+                '--output-dir', help='Specify the experiment output directory.',
+                default=NOT_SET
+            )
+            parsed_args = arg_parser.parse_args(self.args)
 
-        output_dir = parsed_args.output_dir
-        if output_dir is not NOT_SET:
-            # special hack: override `output_dir` if specified
-            self._output_dir = os.path.abspath(output_dir)
-            parsed_args.output_dir = NOT_SET
+            output_dir = parsed_args.output_dir
+            if output_dir is not NOT_SET:
+                # special hack: override `output_dir` if specified
+                self._output_dir = os.path.abspath(output_dir)
+                parsed_args.output_dir = NOT_SET
+
+            parsed_args = {
+                key: value for key, value in vars(parsed_args).items()
+                if value is not NOT_SET
+            }
+        else:
+            parsed_args = {}
 
         # load configuration
         config_files = [
@@ -475,11 +525,9 @@ class Experiment(Generic[TConfig]):
             try:
                 if os.path.exists(config_file):
                     config_loader.load_file(config_file)
-            except Exception:
+            except Exception:  # pragma: no cover
                 raise IOError(f'Failed to load config file: {config_file!r}')
 
-        parsed_args = {key: value for key, value in vars(parsed_args).items()
-                       if value is not NOT_SET}
         config_loader.load_object(parsed_args)
 
         self._config = config_loader.get()

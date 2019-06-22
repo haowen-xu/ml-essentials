@@ -12,7 +12,7 @@ from mltk.config import (is_config_attribute, Config,
                          ConfigValidator, StrValidator, FloatValidator,
                          IntValidator, ConfigValidationError,
                          get_validator, ConfigLoader, FieldValidator,
-                         CustomValidator, deep_copy)
+                         CustomValidator, deep_copy, format_key_values)
 from tests.helpers import set_environ_context
 
 
@@ -624,3 +624,13 @@ class ValidatorTestCase(unittest.TestCase):
                            match='value is not a ValidatorTestCase.'
                                  'test_ConfigValidator.<locals>.MyConfig'):
             context.throw()
+
+
+class FormatKeyValuesTestCase(unittest.TestCase):
+
+    def test_format_key_values(self):
+        with pytest.raises(ValueError,
+                           match='`delimiter_char` must be one character: '
+                                 'got \'xx\''):
+            format_key_values({'a': 1}, delimiter_char='xx')
+

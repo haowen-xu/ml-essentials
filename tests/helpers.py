@@ -5,6 +5,8 @@ import zipfile
 from contextlib import contextmanager
 from typing import *
 
+from mltk.utils import NOT_SET
+
 __all__ = [
     'slow_test', 'get_file_content', 'write_file_content', 'dir_snapshot',
     'prepare_dir', 'zip_snapshot', 'chdir_context', 'set_environ_context',
@@ -90,7 +92,6 @@ def set_environ_context(key_values: Dict[str, str] = None, **kwargs):
     key_values = dict(key_values or ())
     key_values.update(kwargs)
 
-    NOT_SET = ...
     old_values = {}
 
     try:
