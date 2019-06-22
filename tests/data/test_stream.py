@@ -9,7 +9,7 @@ from mltk.data import *
 # Do not delete the following line!
 # It checks whether DataStream is exposed to the root package.
 from mltk import DataStream
-from tests.flags import slow_test
+from tests.helpers import slow_test
 
 
 class DataStreamTestCase(unittest.TestCase):

@@ -27,9 +27,9 @@ import click
 
 from .config import Config, ConfigLoader, deep_copy
 from .events import EventHost, Event
-from .mlstorage import (DocumentType, MLStorageClient, IdType, json_loads,
+from .mlstorage import (DocumentType, MLStorageClient, IdType,
                         normalize_relpath)
-from .utils import exec_proc, timed_wait_proc
+from .utils import exec_proc, timed_wait_proc, json_loads
 
 __all__ = ['MLRunnerConfig', 'MLRunner']
 
@@ -658,6 +658,10 @@ class MLRunner(object):
               help='Specify the URI of MLStorage API server, e.g., '
                    '"http://localhost:8080".  If not specified, will use '
                    '``os.environ["MLSTORAGE_SERVER_URI"]``.')
+@click.option('--resume-from', required=False, default=None,
+              help='ID of the experiment to resume from.')
+@click.option('--clone-from', required=False, default=None,
+              help='ID of the experiment to clone from.')
 @click.option('--copy-source/--no-copy-source',  'copy_source',
               is_flag=True, default=None, required=False,
               help='Whether or not to copy the source files from current '
@@ -682,8 +686,8 @@ class MLRunner(object):
                    'Will override the program arguments (args).')
 @click.argument('args', nargs=-1)
 def mlrun(config_file, name, description, tags, env, gpu, work_dir, server,
-          copy_source, source_archive, parse_stdout, daemon, tensorboard,
-          command, args):
+          resume_from, clone_from, copy_source, source_archive, parse_stdout,
+          daemon, tensorboard, command, args):
     """
     Run an experiment.
 
@@ -792,6 +796,8 @@ def mlrun(config_file, name, description, tags, env, gpu, work_dir, server,
         'gpu': gpu_list,
         'work_dir': work_dir,
         'server': server or os.environ.get('MLSTORAGE_SERVER_URI', None),
+        'resume_from': resume_from,
+        'clone_from': clone_from,
         'source.copy_to_dst': copy_source,
         'source.make_archive': source_archive,
         'integration.parse_stdout': parse_stdout,
@@ -1283,7 +1289,7 @@ class ExperimentDoc(object):
     document to the server in background thread.
     """
 
-    KEYS_TO_EXPAND = ('result', 'webui', 'exc_info')
+    KEYS_TO_EXPAND = ('config', 'result', 'webui', 'exc_info')
 
     def __init__(self,
                  client: MLStorageClient,

@@ -1,4 +1,4 @@
-from typing import Callable, Dict, Iterator, Generic, TypeVar
+from typing import *
 
 __all__ = ['Event', 'EventHost']
 

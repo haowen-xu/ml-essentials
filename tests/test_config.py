@@ -13,6 +13,7 @@ from mltk.config import (is_config_attribute, Config,
                          IntValidator, ConfigValidationError,
                          get_validator, ConfigLoader, FieldValidator,
                          CustomValidator, deep_copy)
+from tests.helpers import set_environ_context
 
 
 class ConfigTestCase(unittest.TestCase):
@@ -127,21 +128,15 @@ class ConfigTestCase(unittest.TestCase):
         self.assertEqual(field.get_default_value(), 123)
 
         # test validator okay
-        try:
-            os.environ['MY_FIELD'] = '123'
+        with set_environ_context(MY_FIELD='123'):
             self.assertEqual(field.get_default_value(), 123)
-        finally:
-            del os.environ['MY_FIELD']
 
         # test validator error
-        try:
-            os.environ['MY_FIELD'] = 'xxx'
+        with set_environ_context(MY_FIELD='xxx'):
             with pytest.raises(ValueError,
                                match=r"invalid literal for int\(\) with base "
                                      r"10: 'xxx'"):
                 _ = field.get_default_value()
-        finally:
-            del os.environ['MY_FIELD']
 
         # test no validator
         field = ConfigField(envvar='MY_FIELD')
@@ -151,11 +146,8 @@ class ConfigTestCase(unittest.TestCase):
         )
         self.assertEqual(field.get_default_value(), ...)
 
-        try:
-            os.environ['MY_FIELD'] = 'hello'
+        with set_environ_context(MY_FIELD='hello'):
             self.assertEqual(field.get_default_value(), 'hello')
-        finally:
-            del os.environ['MY_FIELD']
 
     def test_Config_envvar(self):
         class MyConfig(Config):
@@ -163,11 +155,8 @@ class ConfigTestCase(unittest.TestCase):
 
         self.assertEqual(MyConfig().value, 1)
 
-        try:
-            os.environ['MY_FIELD'] = '123'
+        with set_environ_context(MY_FIELD='123'):
             self.assertEqual(MyConfig().value, 123)
-        finally:
-            del os.environ['MY_FIELD']
 
     def test_Config_setattr(self):
         config = Config()
@@ -216,9 +205,8 @@ class ConfigLoaderTestCase(unittest.TestCase):
         self.assertTrue(loader.validate_all)
 
         with pytest.raises(TypeError,
-                           match='`config_or_cls` is not Config or a subclass '
-                                 'of Config, or an instance of Config: '
-                                 '<class \'str\'>'):
+                           match='`config_or_cls` is neither a Config class, '
+                                 'nor a Config instance: <class \'str\'>'):
             _ = ConfigLoader(str)
 
     def test_load_object(self):

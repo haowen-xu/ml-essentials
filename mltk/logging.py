@@ -5,8 +5,8 @@ from typing import Tuple, Union, Iterable, Dict, Optional, Callable, Any
 
 import numpy as np
 
-from mltk.events import EventHost, Event
-from mltk.utils import format_duration
+from .events import EventHost, Event
+from .utils import format_duration
 
 __all__ = ['StatisticsCollector', 'MetricLogger']
 

@@ -706,9 +706,8 @@ class ConfigLoader(Generic[TConfig]):
             config = config_or_cls
 
         if not issubclass(config_cls, Config):
-            raise TypeError(f'`config_or_cls` is not Config or a subclass of '
-                            f'Config, or an instance of Config: '
-                            f'{config_or_cls!r}')
+            raise TypeError(f'`config_or_cls` is neither a Config class, '
+                            f'nor a Config instance: {config_or_cls!r}')
 
         self._config_cls = config_cls
         self._config = config
@@ -940,7 +939,7 @@ class ConfigLoader(Generic[TConfig]):
             if default_value is NOT_SET:
                 config_help += '(required'
             else:
-                config_help += f'(default {default_value}'
+                config_help += f'(default {default_value!r}'
             if field.choices:
                 config_help += f'; choices {sorted(field.choices)}'
             config_help += ')'

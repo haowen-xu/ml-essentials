@@ -8,7 +8,7 @@ import requests
 from bson import ObjectId
 
 from mltk import MLStorageClient
-from mltk.mlstorage import json_dumps, json_loads
+from mltk.utils import json_dumps, json_loads
 
 
 class MLStorageClientTestCase(unittest.TestCase):

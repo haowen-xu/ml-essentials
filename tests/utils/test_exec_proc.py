@@ -7,7 +7,7 @@ import unittest
 from tempfile import TemporaryDirectory
 
 from mltk.utils import timed_wait_proc, exec_proc
-from tests.flags import slow_test
+from tests.helpers import slow_test
 
 
 def _strip(text):

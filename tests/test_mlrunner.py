@@ -2,20 +2,17 @@
 
 import os
 import re
-
-import requests
 import socket
-import stat
 import sys
 import time
 import unittest
-import zipfile
 from contextlib import contextmanager
 from tempfile import TemporaryDirectory
 
 import httpretty
 import mock
 import pytest
+import requests
 from bson import ObjectId
 from click.testing import CliRunner
 from mock import Mock
@@ -25,64 +22,8 @@ from mltk.mlrunner import (ProgramHost, StdoutParser, MLRunnerConfig,
                            SourceCopier, MLRunnerConfigLoader,
                            TemporaryFileCleaner, JsonFileWatcher, ExperimentDoc,
                            MLRunner, mlrun, ControlServer)
-from mltk.mlstorage import json_dumps, json_loads
-from tests.flags import slow_test
-
-
-def get_file_content(path):
-    with open(path, 'rb') as f:
-        return f.read()
-
-
-def write_file_content(path, content):
-    with open(path, 'wb') as f:
-        f.write(content)
-
-
-def dir_snapshot(path):
-    ret = {}
-    for name in os.listdir(path):
-        f_path = os.path.join(path, name)
-        if os.path.isdir(f_path):
-            ret[name] = dir_snapshot(f_path)
-        else:
-            ret[name] = get_file_content(f_path)
-    return ret
-
-
-def prepare_dir(path, snapshot):
-    os.makedirs(path, exist_ok=True)
-
-    for name, value in snapshot.items():
-        f_path = os.path.join(path, name)
-        if isinstance(value, dict):
-            prepare_dir(f_path, value)
-        else:
-            write_file_content(f_path, value)
-
-
-def zip_snapshot(path):
-    ret = {}
-
-    def put_entry(arcname, cnt):
-        t = ret
-        segments = arcname.strip('/').split('/')
-        for n in segments[:-1]:
-            if n not in t:
-                t[n] = {}
-            t = t[n]
-
-        assert(segments[-1] not in t)
-        t[segments[-1]] = cnt
-
-    with zipfile.ZipFile(path, 'r') as zip_file:
-        for e in zip_file.infolist():
-            if e.filename.endswith('/'):
-                put_entry(e.filename, {})
-            else:
-                put_entry(e.filename, zip_file.read(e.filename))
-
-    return ret
+from mltk.utils import json_dumps, json_loads
+from tests.helpers import *
 
 
 class MLRunnerConfigTestCase(unittest.TestCase):
@@ -397,33 +338,6 @@ class MockMLServer(object):
         pass
 
 
-@contextmanager
-def chdir_context(path):
-    pwd = os.getcwd()
-    try:
-        os.chdir(path)
-        yield
-    finally:
-        os.chdir(pwd)
-
-
-def compute_fs_size_and_inode(path):
-    try:
-        st = os.stat(path)
-        if stat.S_ISDIR(st.st_mode):
-            size, inode = st.st_size, 1
-            for name in os.listdir(path):
-                f_path = os.path.join(path, name)
-                f_size, f_inode = compute_fs_size_and_inode(f_path)
-                size += f_size
-                inode += f_inode
-            return size, inode
-        else:
-            return st.st_size, 1
-    except IOError:
-        return 0, 0
-
-
 class MLRunnerTestCase(unittest.TestCase):
 
     maxDiff = None
@@ -679,15 +593,8 @@ class MLRunnerTestCase(unittest.TestCase):
     def test_work_dir(self):
         parent_id = str(ObjectId())
 
-        @contextmanager
-        def set_parent_id():
-            os.environ['MLSTORAGE_EXPERIMENT_ID'] = parent_id
-            try:
-                yield
-            finally:
-                del os.environ['MLSTORAGE_EXPERIMENT_ID']
-
-        with TemporaryDirectory() as temp_dir, set_parent_id():
+        with TemporaryDirectory() as temp_dir, \
+                set_environ_context(MLSTORAGE_EXPERIMENT_ID=parent_id):
             # prepare for the source dir
             source_root = os.path.join(temp_dir, 'source')
             source_fiels = {
@@ -878,8 +785,8 @@ class MLRunTestCase(unittest.TestCase):
             ))
 
             # test various arguments
-            os.environ['MLSTORAGE_SERVER_URI'] = 'http://127.0.0.1:8080'
-            try:
+            with set_environ_context(
+                    MLSTORAGE_SERVER_URI='http://127.0.0.1:8080'):
                 result = runner.invoke(mlrun, [
                     '-C', config1,
                     '--config-file=' + config2,
@@ -898,6 +805,8 @@ class MLRunTestCase(unittest.TestCase):
                     '--no-source-archive',
                     '--no-parse-stdout',
                     '--copy-source',
+                    '--resume-from=xyzz',
+                    '--clone-from=zyxx',
                 ])
                 print(result)
                 self.assertEqual(result.exit_code, 0)
@@ -921,14 +830,14 @@ class MLRunTestCase(unittest.TestCase):
                     ),
                     integration=MLRunnerConfig.integration(
                         parse_stdout=False
-                    )
+                    ),
+                    resume_from='xyzz',
+                    clone_from='zyxx',
                 ))
                 config_loader = PatchedMLRunnerConfigLoader.last_instance
                 self.assertEqual(config_loader._user_config_files,
                                  (config1, config2))
                 self.assertTrue(config_loader.loaded)
-            finally:
-                del os.environ['MLSTORAGE_SERVER_URI']
 
             # test None exit code
             PatchedMLRunner.exit_code = None
@@ -1208,13 +1117,13 @@ class ExperimentDocTestCase(unittest.TestCase):
         doc.update({'webui': {'cc': '33'}, 'config': {'aa': 11}})
         self.assertDictEqual(doc.updates, {
             'name': 'xyz', 'result.bb': 22, 'webui.cc': '33',
-            'config': {'aa': 11}
+            'config.aa': 11
         })
         self.assertDictEqual(doc.merge_doc_updates(), {
             '_id': object_id,
             'name': 'xyz',
             'description': 'the description',
-            'config': {'aa': 11},
+            'config': {'a': 1, 'aa': 11},
             'result': {'b': 2, 'bb': 22},
             'webui': {'cc': '33'},
         })
@@ -1224,7 +1133,7 @@ class ExperimentDocTestCase(unittest.TestCase):
             '_id': object_id,
             'name': 'xyz',
             'description': 'the description',
-            'config': {'aa': 11},
+            'config': {'a': 1, 'aa': 11},
             'result': {'b': 2, 'bb': 22},
             'webui': {'cc': '33', 'ccc': '333'},
             'exit_code': 0,
@@ -1235,7 +1144,7 @@ class ExperimentDocTestCase(unittest.TestCase):
             self.assertEqual(status, 'COMPLETED')
             self.assertDictEqual(updates, {
                 'name': 'xyz', 'result.bb': 22, 'webui.cc': '33',
-                'webui.ccc': '333', 'config': {'aa': 11}, 'exit_code': 0
+                'webui.ccc': '333', 'config.aa': 11, 'exit_code': 0
             })
             return merged_doc
 
@@ -1307,10 +1216,10 @@ class ExperimentDocTestCase(unittest.TestCase):
             def mock_update(id, updates):
                 self.assertEqual(id, object_id)
                 self.assertDictEqual(updates, {
-                    'config': {'aa': 11},
+                    'config.aa': 11,
                     'result.bb': 22,
                 })
-                the_doc['config'] = {'aa': 11}
+                the_doc['config'] = {'a': 1, 'aa': 11}
                 the_doc['result'] = {'b': 2, 'bb': 22}
                 return the_doc
 
@@ -1345,11 +1254,12 @@ class ExperimentDocTestCase(unittest.TestCase):
         with doc:
             expected_updates = [
                 (object_id, {
-                    'config': {'aa': 11},
+                    'config.aa': 11,
                     'result.bb': 22,
                 }),
                 (object_id, {
-                    'config': {'aaa': 111},
+                    'config.aa': 11,
+                    'config.aaa': 111,
                     'result.bb': 22,
                     'result.bbb': 222,
                 })
@@ -1371,7 +1281,8 @@ class ExperimentDocTestCase(unittest.TestCase):
             self.assertListEqual(update_logs, expected_updates)
 
         self.assertDictEqual(doc.updates, {
-            'config': {'aaa': 111},
+            'config.aa': 11,
+            'config.aaa': 111,
             'result.bb': 22,
             'result.bbb': 222,
         })
@@ -1598,6 +1509,7 @@ class JsonFileWatcherTestCase(unittest.TestCase):
 
 class ControlPortServerTestCase(unittest.TestCase):
 
+    @slow_test
     def test_server(self):
         server = ControlServer('127.0.0.1', 12379)
         self.assertEqual(server.uri, 'http://127.0.0.1:12379')

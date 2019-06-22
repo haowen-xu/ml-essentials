@@ -6,7 +6,7 @@ from typing import *
 
 import numpy as np
 
-from mltk.utils import minibatch_slices_iterator, AutoInitAndCloseable
+from ..utils import minibatch_slices_iterator, AutoInitAndCloseable
 
 __all__ = [
     'DataStream', 'UserGeneratorDataStream',
