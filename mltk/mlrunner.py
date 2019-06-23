@@ -29,7 +29,7 @@ from .config import Config, ConfigLoader, deep_copy
 from .events import EventHost, Event
 from .mlstorage import (DocumentType, MLStorageClient, IdType,
                         normalize_relpath)
-from .utils import exec_proc, timed_wait_proc, json_loads
+from .utils import exec_proc, timed_wait_proc, json_loads, DocInherit
 
 __all__ = ['MLRunnerConfig', 'MLRunner']
 

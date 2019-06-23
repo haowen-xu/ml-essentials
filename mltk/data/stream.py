@@ -1,4 +1,3 @@
-from abc import ABC
 from logging import getLogger
 from queue import Queue
 from threading import Thread, Semaphore
@@ -6,7 +5,7 @@ from typing import *
 
 import numpy as np
 
-from ..utils import minibatch_slices_iterator, AutoInitAndCloseable
+from ..utils import minibatch_slices_iterator, AutoInitAndCloseable, DocInherit
 
 __all__ = [
     'DataStream', 'UserGeneratorDataStream',
@@ -49,7 +48,7 @@ def ensure_batch_is_tuple(batch: Union[ArrayType, TupleOfArrays]
     return batch
 
 
-class DataStream(ABC):
+class DataStream(object):
     """
     Class to construct mini-batch data iterators.
 
@@ -1026,7 +1025,7 @@ class IntSeqDataStream(DataStream):
         )
 
 
-class UserGeneratorDataStream(DataStream, ABC):
+class UserGeneratorDataStream(DataStream):
     """Base class for data streams with user generated data."""
 
     def _validate_batch(self, batch):

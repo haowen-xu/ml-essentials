@@ -1,5 +1,3 @@
-from abc import ABC
-
 __all__ = [
     'AutoInitAndCloseable', 'NoReentrantContext', 'Disposable',
     'DisposableContext'
@@ -117,7 +115,7 @@ class NoReentrantContext(object):
             return self._exit(exc_type, exc_val, exc_tb)
 
 
-class DisposableContext(NoReentrantContext, ABC):
+class DisposableContext(NoReentrantContext):
     """
     Base class for contexts which can only be entered once.
     """

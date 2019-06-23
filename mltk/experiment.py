@@ -8,7 +8,7 @@ from typing import *
 
 from .config import Config, ConfigLoader
 from .events import EventHost, Event
-from .utils import NOT_SET, make_dir_archive, json_dumps, json_loads
+from .utils import NOT_SET, make_dir_archive, json_dumps, json_loads, DocInherit
 
 __all__ = ['Experiment']
 

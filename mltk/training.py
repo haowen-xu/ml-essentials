@@ -13,7 +13,8 @@ from .events import EventHost, Event
 from .logging import MetricLogger, MetricType, StatisticsCollector
 from .stateful import (StatefulObject, SimpleStatefulObject,
                        StatefulObjectGroup, StateSaver)
-from .utils import optional_apply, format_duration, DisposableContext, ETA
+from .utils import (optional_apply, format_duration, DisposableContext, ETA,
+                    DocInherit)
 
 __all__ = ['TrainLoopFreq', 'TrainLoop']
 

@@ -6,7 +6,7 @@ from typing import Tuple, Union, Iterable, Dict, Optional, Callable, Any
 import numpy as np
 
 from .events import EventHost, Event
-from .utils import format_duration
+from .utils import format_duration, DocInherit
 
 __all__ = ['StatisticsCollector', 'MetricLogger']
 
