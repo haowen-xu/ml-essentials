@@ -1,4 +1,6 @@
+import os
 import time
+from contextlib import contextmanager
 from typing import *
 
 import numpy as np
@@ -7,6 +9,7 @@ __all__ = [
     'NOT_SET',
     'format_duration', 'ETA', 'minibatch_slices_iterator',
     'optional_apply',
+    'maybe_close', 'iter_files',
 ]
 
 NOT_SET = ...
@@ -196,3 +199,69 @@ def optional_apply(f, value):
     """
     if value is not None:
         return f(value)
+
+
+@contextmanager
+def maybe_close(obj):
+    """
+    Enter a context, and if `obj` has ``.close()`` method, close it
+    when exiting the context.
+
+    >>> class HasClose(object):
+    ...     def close(self):
+    ...         print('closed')
+
+    >>> class HasNotClose(object):
+    ...     pass
+
+    >>> with maybe_close(HasClose()) as obj:  # doctest: +ELLIPSIS
+    ...     print(obj)
+    <mltk.utils.misc.HasClose ...>
+    closed
+
+    >>> with maybe_close(HasNotClose()) as obj:  # doctest: +ELLIPSIS
+    ...     print(obj)
+    <mltk.utils.misc.HasNotClose ...>
+
+    Args:
+        obj: The object maybe to close.
+
+    Yields:
+        The specified `obj`.
+    """
+    try:
+        yield obj
+    finally:
+        if hasattr(obj, 'close'):
+            obj.close()
+
+
+def iter_files(root_dir: str, sep: str = '/') -> Generator[str, None, None]:
+    """
+    Iterate through all files in `root_dir`, returning the relative paths
+    of each file.  The sub-directories will not be yielded.
+
+    Args:
+        root_dir: The root directory, from which to iterate.
+        sep: The separator for the relative paths.
+
+    Yields:
+        The relative paths of each file.
+    """
+    def f(parent_path, parent_name):
+        for f_name in os.listdir(parent_path):
+            f_child_path = parent_path + os.sep + f_name
+            f_child_name = parent_name + sep + f_name
+            if os.path.isdir(f_child_path):
+                for s in f(f_child_path, f_child_name):
+                    yield s
+            else:
+                yield f_child_name
+
+    for name in os.listdir(root_dir):
+        child_path = root_dir + os.sep + name
+        if os.path.isdir(child_path):
+            for x in f(child_path, name):
+                yield x
+        else:
+            yield name

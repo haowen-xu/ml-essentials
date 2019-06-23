@@ -14,7 +14,7 @@ import numpy as np
 import yaml
 from terminaltables import AsciiTable
 
-from .utils import NOT_SET, DocInherit
+from .utils import NOT_SET
 
 __all__ = [
     'ConfigAttributeNotSetError', 'ConfigValidationError',

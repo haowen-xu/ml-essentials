@@ -1,5 +1,6 @@
 .idea
 *.iml
+*.lock
 .DS_Store
 /debug.py
 /results

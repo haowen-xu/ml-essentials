@@ -1,4 +1,6 @@
+import os
 import unittest
+from tempfile import TemporaryDirectory
 
 import numpy as np
 
@@ -146,3 +148,21 @@ class ETATestCase(unittest.TestCase):
         eta.take_snapshot(0., 0)
         # progress is too small for estimating the ETA
         self.assertIsNone(eta.get_eta(5e-8, 1.))
+
+
+class IterFilesTestCase(unittest.TestCase):
+
+    def test_iter_files(self):
+        names = ['a/1.txt', 'a/2.txt', 'a/b/1.txt', 'a/b/2.txt',
+                 'b/1.txt', 'b/2.txt', 'c.txt']
+
+        with TemporaryDirectory() as tempdir:
+            for name in names:
+                f_path = os.path.join(tempdir, name)
+                f_dir = os.path.split(f_path)[0]
+                os.makedirs(f_dir, exist_ok=True)
+                with open(f_path, 'wb') as f:
+                    f.write(b'')
+
+            self.assertListEqual(names, sorted(iter_files(tempdir)))
+            self.assertListEqual(names, sorted(iter_files(tempdir + '/a/../')))

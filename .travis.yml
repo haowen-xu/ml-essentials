@@ -5,6 +5,7 @@ python:
 dist: xenial
 sudo: true
 install:
+  - sudo apt-get update && sudo apt-get -y install unrar
   - pip install -r requirements-dev.txt
 script:
   - coverage run -m pytest && coveralls

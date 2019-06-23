@@ -8,13 +8,12 @@ from functools import wraps
 from logging import getLogger
 from typing import *
 
-from .data.stream import DataStream
+from .data import DataStream
 from .events import EventHost, Event
 from .logging import MetricLogger, MetricType, StatisticsCollector
 from .stateful import (StatefulObject, SimpleStatefulObject,
                        StatefulObjectGroup, StateSaver)
-from .utils import (optional_apply, format_duration, DisposableContext, ETA,
-                    DocInherit)
+from .utils import optional_apply, format_duration, DisposableContext, ETA
 
 __all__ = ['TrainLoopFreq', 'TrainLoop']
 
