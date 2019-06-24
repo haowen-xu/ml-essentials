@@ -1,6 +1,7 @@
 cachetools >= 3.1.1
 click >= 6.7
 filelock >= 3.0.10
+idx2numpy >= 1.2.2
 numpy >= 1.16.2
 pprint >= 0.1
 PyMongo >= 3.8.0

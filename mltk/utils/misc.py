@@ -8,7 +8,7 @@ import numpy as np
 __all__ = [
     'NOT_SET',
     'format_duration', 'ETA', 'minibatch_slices_iterator',
-    'optional_apply',
+    'optional_apply',  'validate_enum_arg',
     'maybe_close', 'iter_files',
 ]
 
@@ -199,6 +199,38 @@ def optional_apply(f, value):
     """
     if value is not None:
         return f(value)
+
+
+TArgValue = TypeVar('TArgValue')
+
+
+def validate_enum_arg(arg_name: str,
+                      arg_value: Optional[TArgValue],
+                      choices: Iterable[TArgValue],
+                      nullable: bool = False) -> Optional[TArgValue]:
+    """
+    Validate the value of an enumeration argument.
+
+    Args:
+        arg_name: Name of the argument.
+        arg_value: Value of the argument.
+        choices: Valid choices of the argument value.
+        nullable: Whether or not the argument can be None?
+
+    Returns:
+        The validated argument value.
+
+    Raises:
+        ValueError: If `arg_value` is not valid.
+    """
+    choices = tuple(choices)
+
+    if not (nullable and arg_value is None) and (arg_value not in choices):
+        raise ValueError('Invalid value for argument `{}`: expected to be one '
+                         'of {!r}, but got {!r}.'.
+                         format(arg_name, choices, arg_value))
+
+    return arg_value
 
 
 @contextmanager

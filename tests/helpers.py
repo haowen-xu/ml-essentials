@@ -8,17 +8,25 @@ from typing import *
 from mltk.utils import NOT_SET
 
 __all__ = [
-    'slow_test', 'get_file_content', 'write_file_content', 'dir_snapshot',
+    'slow_test', 'remote_test',
+    'get_file_content', 'write_file_content', 'dir_snapshot',
     'prepare_dir', 'zip_snapshot', 'chdir_context', 'set_environ_context',
     'compute_fs_size_and_inode',
 ]
 
 FAST = os.environ.get('FAST_TEST', '0') == '1'
+LOCAL = os.environ.get('LOCAL_TEST', '0') == '1'
 
 
 def slow_test(method):
     return unittest.skipIf(
         FAST, 'slow tests are skipped in fast test mode')(method)
+
+
+def remote_test(method):
+    return unittest.skipIf(
+        FAST or LOCAL,
+        'remote tests are skipped in fast test and local test mode')(method)
 
 
 def get_file_content(path):

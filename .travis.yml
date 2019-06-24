@@ -8,4 +8,6 @@ install:
   - sudo apt-get update && sudo apt-get -y install unrar
   - pip install -r requirements-dev.txt
 script:
+  - export LOCAL_TEST=$(if [ "$TRAVIS_BRANCH" != "master" ]; then echo "1"; else echo "0"; fi)
+  - echo LOCAL_TEST="${LOCAL_TEST}"
   - coverage run -m pytest && coveralls

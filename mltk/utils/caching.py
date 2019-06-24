@@ -196,7 +196,7 @@ class CacheDir(object):
                  uri: str,
                  filename: Optional[str] = None,
                  show_progress: Optional[bool] = None,
-                 progress_file = sys.stderr,
+                 progress_file=sys.stderr,
                  hasher=None,
                  expected_hash: Optional[str] = None) -> str:
         """
@@ -273,7 +273,7 @@ class CacheDir(object):
                      archive_file,
                      extract_dir: Optional[str] = None,
                      show_progress: Optional[bool] = None,
-                     progress_file = sys.stderr) -> str:
+                     progress_file=sys.stderr) -> str:
         """
         Extract an archive file into this :class:`CacheDir`.
 
@@ -317,7 +317,7 @@ class CacheDir(object):
                              filename: Optional[str] = None,
                              extract_dir: Optional[str] = None,
                              show_progress: Optional[bool] = None,
-                             progress_file = sys.stderr,
+                             progress_file=sys.stderr,
                              hasher=None,
                              expected_hash: Optional[str] = None) -> str:
         """
@@ -373,7 +373,7 @@ class CacheDir(object):
                     archive_file, extract_path, show_progress=show_progress,
                     progress_file=progress_file
                 )
-                # download the archive file if we successfully extracted it.
+                # delete the archive file if we successfully extracted it.
                 os.remove(file_path)
             return extract_path
 
