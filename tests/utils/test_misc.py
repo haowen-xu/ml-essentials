@@ -166,3 +166,26 @@ class IterFilesTestCase(unittest.TestCase):
 
             self.assertListEqual(names, sorted(iter_files(tempdir)))
             self.assertListEqual(names, sorted(iter_files(tempdir + '/a/../')))
+
+
+class InheritanceDictTestCase(unittest.TestCase):
+
+    def test_dict(self):
+        class GrandPa(object): pass
+        class Parent(GrandPa): pass
+        class Child(Parent): pass
+        class Uncle(GrandPa): pass
+
+        d = InheritanceDict()
+        d[Child] = 1
+        d[GrandPa] = 2
+        d[Uncle] = 3
+
+        self.assertEqual(d[GrandPa], 2)
+        self.assertEqual(d[Parent], 2)
+        self.assertEqual(d[Child], 1)
+        self.assertEqual(d[Uncle], 3)
+
+        d[GrandPa] = 22
+        self.assertEqual(d[GrandPa], 22)
+        self.assertEqual(d[Parent], 22)

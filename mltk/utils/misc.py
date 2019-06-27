@@ -4,12 +4,13 @@ from contextlib import contextmanager
 from typing import *
 
 import numpy as np
+from heapdict import heapdict
 
 __all__ = [
     'NOT_SET',
     'format_duration', 'ETA', 'minibatch_slices_iterator',
     'optional_apply',  'validate_enum_arg',
-    'maybe_close', 'iter_files',
+    'maybe_close', 'iter_files', 'InheritanceDict',
 ]
 
 NOT_SET = ...
@@ -297,3 +298,89 @@ def iter_files(root_dir: str, sep: str = '/') -> Generator[str, None, None]:
                 yield x
         else:
             yield name
+
+
+TValue = TypeVar('TValue')
+
+
+class _InheritanceNode(object):
+
+    def __init__(self, type_: type):
+        self.type = type_
+        self.children = []
+
+    def add_child(self, child: '_InheritanceNode'):
+        self.children.append(child)
+
+
+class InheritanceDict(Generic[TValue]):
+    """
+    A dict that gives the registered value of the closest known ancestor
+    of a query type (`ancestor` includes the type itself).
+
+    >>> class GrandPa(object): pass
+    >>> class Parent(GrandPa): pass
+    >>> class Child(Parent): pass
+    >>> class Uncle(GrandPa): pass
+
+    >>> d = InheritanceDict()
+    >>> d[Child] = 1
+    >>> d[GrandPa] = 2
+    >>> d[Uncle] = 3
+    >>> d[GrandPa]
+    2
+    >>> d[Parent]
+    2
+    >>> d[Child]
+    1
+    >>> d[Uncle]
+    3
+    >>> d[str]
+    Traceback (most recent call last):
+        ...
+    KeyError: <class 'str'>
+    """
+
+    def __init__(self):
+        self._nodes = []  # type: List[_InheritanceNode]
+        self._values = {}
+        self._topo_sorted = None
+
+    def __setitem__(self, type_: type, value: TValue):
+        this_node = _InheritanceNode(type_)
+        if type_ not in self._values:
+            for node in self._nodes:
+                if issubclass(type_, node.type):
+                    node.add_child(this_node)
+                elif issubclass(node.type, type_):
+                    this_node.add_child(node)
+            self._nodes.append(this_node)
+            self._topo_sorted = None
+        self._values[type_] = value
+
+    def __getitem__(self, type_: type) -> TValue:
+        if self._topo_sorted is None:
+            self._topo_sort()
+        for t in reversed(self._topo_sorted):
+            if t is type_ or issubclass(type_, t):
+                return self._values[t]
+        raise KeyError(type_)
+
+    def _topo_sort(self):
+        parent_count = {node: 0 for node in self._nodes}
+        for node in self._nodes:
+            for child in node.children:
+                parent_count[child] += 1
+
+        heap = heapdict()
+        for node, pa_count in parent_count.items():
+            heap[node] = pa_count
+
+        topo_sorted = []
+        while heap:
+            node, priority = heap.popitem()
+            topo_sorted.append(node.type)
+            for child in node.children:
+                heap[child] -= 1
+
+        self._topo_sorted = topo_sorted
