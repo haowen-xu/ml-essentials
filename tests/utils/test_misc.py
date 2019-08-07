@@ -3,6 +3,7 @@ import unittest
 from tempfile import TemporaryDirectory
 
 import numpy as np
+import pytest
 
 from mltk.utils import *
 
@@ -170,11 +171,12 @@ class IterFilesTestCase(unittest.TestCase):
 
 class InheritanceDictTestCase(unittest.TestCase):
 
-    def test_dict(self):
+    def test_base(self):
         class GrandPa(object): pass
         class Parent(GrandPa): pass
         class Child(Parent): pass
         class Uncle(GrandPa): pass
+        class NotExist(object): pass
 
         d = InheritanceDict()
         d[Child] = 1
@@ -186,6 +188,49 @@ class InheritanceDictTestCase(unittest.TestCase):
         self.assertEqual(d[Child], 1)
         self.assertEqual(d[Uncle], 3)
 
+        with pytest.raises(KeyError):
+            _ = d[NotExist]
+
         d[GrandPa] = 22
         self.assertEqual(d[GrandPa], 22)
         self.assertEqual(d[Parent], 22)
+
+        with pytest.raises(KeyError):
+            _ = d[NotExist]
+
+    def test_cached(self):
+        class GrandPa(object): pass
+        class Parent(GrandPa): pass
+        class Child(Parent): pass
+        class Uncle(GrandPa): pass
+        class NotExist(object): pass
+
+        d = CachedInheritanceDict()
+        d[Child] = 1
+        d[GrandPa] = 2
+        d[Uncle] = 3
+
+        self.assertEqual(d[GrandPa], 2)
+        self.assertEqual(d[GrandPa], 2)
+        self.assertEqual(d[Parent], 2)
+        self.assertEqual(d[Parent], 2)
+        self.assertEqual(d[Child], 1)
+        self.assertEqual(d[Child], 1)
+        self.assertEqual(d[Uncle], 3)
+        self.assertEqual(d[Uncle], 3)
+
+        with pytest.raises(KeyError):
+            _ = d[NotExist]
+        with pytest.raises(KeyError):
+            _ = d[NotExist]
+
+        d[GrandPa] = 22
+        self.assertEqual(d[GrandPa], 22)
+        self.assertEqual(d[GrandPa], 22)
+        self.assertEqual(d[Parent], 22)
+        self.assertEqual(d[Parent], 22)
+
+        with pytest.raises(KeyError):
+            _ = d[NotExist]
+        with pytest.raises(KeyError):
+            _ = d[NotExist]

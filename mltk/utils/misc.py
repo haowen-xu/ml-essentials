@@ -10,7 +10,8 @@ __all__ = [
     'NOT_SET',
     'format_duration', 'ETA', 'minibatch_slices_iterator',
     'optional_apply',  'validate_enum_arg',
-    'maybe_close', 'iter_files', 'InheritanceDict',
+    'maybe_close', 'iter_files',
+    'InheritanceDict', 'CachedInheritanceDict',
 ]
 
 NOT_SET = ...
@@ -384,3 +385,38 @@ class InheritanceDict(Generic[TValue]):
                 heap[child] -= 1
 
         self._topo_sorted = topo_sorted
+
+
+class CachedInheritanceDict(InheritanceDict[TValue]):
+    """
+    A subclass of :class:`InheritanceDict`, with an additional lookup cache.
+
+    The cache is infinitely large, thus this class is only suitable under the
+    situation where the number of queried types are not too large.
+    """
+
+    NOT_EXIST = ...
+
+    def __init__(self):
+        super().__init__()
+        self._cache = {}  # type: Dict[type, TValue]
+
+    def _topo_sort(self):
+        self._cache.clear()
+        super()._topo_sort()
+
+    def __getitem__(self, type_: type) -> TValue:
+        ret = self._cache.get(type_, None)
+        if ret is None:
+            try:
+                ret = self._cache[type_] = super().__getitem__(type_)
+            except KeyError:
+                self._cache[type_] = self.NOT_EXIST
+                raise
+        elif ret is self.NOT_EXIST:
+            raise KeyError(type_)
+        return ret
+
+    def __setitem__(self, type_: type, value: TValue):
+        self._cache.clear()
+        super().__setitem__(type_, value)
