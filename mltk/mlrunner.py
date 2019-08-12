@@ -680,7 +680,8 @@ class MLRunner(object):
                    'executed along with the main experiment process.')
 @click.option('--tensorboard', is_flag=True, required=False, default=None,
               help='Launch a TensorBoard server in the work directory. '
-                   'This is equivalent to `-D "tensorboard --logdir=."`')
+                   'This is equivalent to '
+                   '`-D "tensorboard --logdir=. --port=0"`')
 @click.option('-c', 'command', required=False, default=None,
               help='Specify the shell command to execute. '
                    'Will override the program arguments (args).')
@@ -785,7 +786,7 @@ def mlrun(config_file, name, description, tags, env, gpu, work_dir, server,
     # parse the daemon
     if tensorboard:
         daemon = list(daemon or [])
-        daemon.append('tensorboard --logdir=.')
+        daemon.append('tensorboard --logdir=. --port=0')
 
     # feed CLI arguments into MLRunnerConfig
     cli_config = {

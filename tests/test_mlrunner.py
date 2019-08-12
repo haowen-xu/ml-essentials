@@ -822,7 +822,7 @@ class MLRunTestCase(unittest.TestCase):
                     daemon=[
                         'echo hello',
                         'echo hi',
-                        'tensorboard --logdir=.',
+                        'tensorboard --logdir=. --port=0',
                     ],
                     source=MLRunnerConfig.source(
                         copy_to_dst=True,
