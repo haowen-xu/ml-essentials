@@ -31,6 +31,8 @@ class ExperimentTestCase(unittest.TestCase):
         self.assertEqual(exp.script_name, script_name)
         self.assertEqual(
             exp.output_dir, os.path.abspath(f'./results/{script_name}'))
+        self.assertIsNone(exp.id)
+        self.assertIsNone(exp.client)
 
         # test select output dir according to mlrunner env
         with TemporaryDirectory() as temp_dir:
@@ -72,6 +74,14 @@ class ExperimentTestCase(unittest.TestCase):
 
         args = ('--output-dir=abc', '--max_epoch=123')
         self.assertTupleEqual(Experiment(_YourConfig, args=args).args, args)
+
+        # test specifying the environment variable of MLStorage server
+        with set_environ_context(MLSTORAGE_SERVER_URI='http://localhost:8080',
+                                 MLSTORAGE_EXPERIMENT_ID='your_id'):
+            e = Experiment(_YourConfig)
+            self.assertEqual(e.id, 'your_id')
+            self.assertIsInstance(e.client, MLStorageClient)
+            self.assertEqual(e.client.uri, 'http://localhost:8080')
 
     def test_events(self):
         with TemporaryDirectory() as temp_dir:

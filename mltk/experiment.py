@@ -8,6 +8,7 @@ from typing import *
 
 from .config import Config, ConfigLoader
 from .events import EventHost, Event
+from .mlstorage import MLStorageClient
 from .utils import NOT_SET, make_dir_archive, json_dumps, json_loads
 
 __all__ = ['Experiment']
@@ -68,6 +69,9 @@ class Experiment(Generic[TConfig]):
     will be assigned by MLStorage server.  For example::
 
         mlrun -s http://<server>:<port> -- python main.py --max_epoch=200
+
+    You may also get the server URI and the experiment ID assigned by the
+    server via the properties `id` and `client`.
 
     To resume from an interrupted experiment with `mlrun`::
 
@@ -152,6 +156,26 @@ class Experiment(Generic[TConfig]):
         self._events = EventHost()
         self._on_enter = self.events['on_enter']
         self._on_exit = self.events['on_exit']
+
+        # initialize the MLStorage client if environment variable is set
+        id = os.environ.get('MLSTORAGE_EXPERIMENT_ID', None)
+        if os.environ.get('MLSTORAGE_SERVER_URI', None):
+            client = MLStorageClient(os.environ['MLSTORAGE_SERVER_URI'])
+        else:
+            client = None
+
+        self._id = id
+        self._client = client
+
+    @property
+    def id(self) -> Optional[str]:
+        """Get the experiment ID, if the environment variable is set."""
+        return self._id
+
+    @property
+    def client(self) -> Optional[MLStorageClient]:
+        """Get the MLStorage client, if the environment variable is set."""
+        return self._client
 
     @property
     def config(self) -> TConfig:
