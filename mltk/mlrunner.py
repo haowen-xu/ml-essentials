@@ -455,7 +455,6 @@ class MLRunner(object):
                     proc = p
                     yield proc
             finally:
-                daemon.kill()
                 if proc is not None:
                     code = proc.poll()
                     if code is not None:
@@ -519,11 +518,13 @@ class MLRunner(object):
                 })
 
                 # wait for the process to exit
-                code = proc.wait()
-                getLogger(__name__).info(
-                    f'Experiment process exited with code: {code}')
+                _ = proc.wait()
 
-            return proc.wait()
+            code = proc.poll()
+            getLogger(__name__).info(
+                f'Experiment process exited with code: {code}')
+
+            return code
 
     def run(self):
         """Run the experiment."""
@@ -1194,7 +1195,7 @@ class ProgramHost(object):
             try:
                 self.proc.send_signal(ctrl_c_signal)
                 if timed_wait_proc(self.proc, ctrl_c_timeout) is None:
-                    self.proc.kill()
+                    self.proc.kill()  # pragma: no cover
             except ProcessLookupError:  # pragma: no cover
                 # which indicates the process has exited
                 pass

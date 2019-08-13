@@ -2,6 +2,8 @@ import os
 import signal
 import subprocess
 import sys
+import time
+import types
 from contextlib import contextmanager
 from threading import Thread
 from typing import *
@@ -22,10 +24,23 @@ def timed_wait_proc(proc: subprocess.Popen, timeout: float) -> Optional[int]:
     Returns:
         The exit code, or :obj:`None` if the process does not exit.
     """
-    try:
-        return proc.wait(timeout)
-    except subprocess.TimeoutExpired:
-        return None
+    start_time = time.time()
+    sleep_itv = min(timeout / 20., 1)
+    ret = proc.poll()
+    while ret is None:
+        time.sleep(sleep_itv)
+        if time.time() - start_time >= timeout:
+            break
+        ret = proc.poll()
+    return ret
+
+    # Strangely, the following code will cause the process to be waited
+    # indefinitely on Linux, if the underlying process is defuncted.
+
+    # try:
+    #     return proc.wait(timeout)
+    # except subprocess.TimeoutExpired:
+    #     return None
 
 
 @contextmanager
@@ -35,7 +50,6 @@ def exec_proc(args: Union[str, Iterable[str]],
               stderr_to_stdout: bool = False,
               buffer_size: int = 16 * 1024,
               ctrl_c_timeout: int = 3,
-              kill_timeout: int = 60,
               **kwargs) -> Generator[subprocess.Popen, None, None]:
     """
     Execute an external program within a context.
@@ -50,8 +64,6 @@ def exec_proc(args: Union[str, Iterable[str]],
         buffer_size: Size of buffers for reading from stdout and stderr.
         ctrl_c_timeout: Seconds to wait for the program to respond to
             CTRL+C signal.
-        kill_timeout: Seconds to wait for the program to terminate after
-            being killed.
         \\**kwargs: Other named arguments passed to :func:`subprocess.Popen`.
 
     Yields:
@@ -93,6 +105,14 @@ def exec_proc(args: Union[str, Iterable[str]],
         shell = False
     proc = subprocess.Popen(args, shell=shell, **kwargs)
 
+    # patch the kill(), such that it will be killed more definitely
+    if sys.platform != 'win32':
+        def my_kill(self):
+            print(f'start kill {self.pid}')
+            os.kill(self.pid, signal.SIGKILL)
+            print(f'end kill {self.pid}')
+        proc.kill = types.MethodType(my_kill, proc)
+
     try:
         if on_stdout is not None:
             stdout_thread = make_reader_thread(proc.stdout.fileno(), on_stdout)
@@ -118,8 +138,6 @@ def exec_proc(args: Union[str, Iterable[str]],
             if timed_wait_proc(proc, ctrl_c_timeout) is None:
                 # If the Ctrl+C signal does not work, terminate it.
                 proc.kill()
-            # Finally, wait for at most 60 seconds
-            if timed_wait_proc(proc, kill_timeout) is None:  # pragma: no cover
                 giveup_waiting[0] = True
 
         # Close the pipes such that the reader threads will ensure to exit,
@@ -127,15 +145,16 @@ def exec_proc(args: Union[str, Iterable[str]],
         def close_pipes():
             for f in (proc.stdout, proc.stderr, proc.stdin):
                 if f is not None:
-                    f.close()
-
-        if giveup_waiting[0]:  # pragma: no cover
-            close_pipes()
+                    try:
+                        f.close()
+                    except Exception:  # pragma: no cover
+                        pass
 
         # Wait for the reader threads to exit
-        for th in (stdout_thread, stderr_thread):
-            if th is not None:
-                th.join()
+        if not giveup_waiting[0]:
+            for th in (stdout_thread, stderr_thread):
+                if th is not None:
+                    th.join()
 
         # Ensure all the pipes are closed.
         if not giveup_waiting[0]:

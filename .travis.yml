@@ -10,4 +10,6 @@ install:
 script:
   - export LOCAL_TEST=$(if [ "$TRAVIS_BRANCH" != "master" ]; then echo "1"; else echo "0"; fi)
   - echo LOCAL_TEST="${LOCAL_TEST}"
-  - coverage run -m pytest && coveralls
+  - coverage run -m pytest
+after_success:
+  - coveralls
