@@ -498,31 +498,36 @@ class MLRunner(object):
                     )
 
             # run the main process
-            with main_host.exec_proc() as proc, \
-                    control_server.run_in_background():
-                getLogger(__name__).info(
-                    'Started experiment process %s: %s',
-                    proc.pid, self.config.args
-                )
-                getLogger(__name__).info(
-                    'Control server started at: %s', control_server.uri)
+            try:
+                with main_host.exec_proc() as proc, \
+                        control_server.run_in_background():
+                    getLogger(__name__).info(
+                        'Started experiment process %s: %s',
+                        proc.pid, self.config.args
+                    )
+                    getLogger(__name__).info(
+                        'Control server started at: %s', control_server.uri)
 
-                # update the doc with execution info
-                self.doc.update({
-                    'exc_info': {
-                        'pid': proc.pid,
-                    },
-                    'control_port': {
-                        'kill': control_server.uri + '/kill',
-                    }
-                })
+                    # update the doc with execution info
+                    self.doc.update({
+                        'exc_info': {
+                            'pid': proc.pid,
+                        },
+                        'control_port': {
+                            'kill': control_server.uri + '/kill',
+                        }
+                    })
 
-                # wait for the process to exit
-                code = proc.wait()
-                getLogger(__name__).info(
-                    f'Experiment process exited with code: {code}')
+                    # wait for the process to exit
+                    code = proc.wait()
+                    getLogger(__name__).info(
+                        f'Experiment process exited with code: {code}')
 
-            return proc.wait()
+                return proc.wait()
+            finally:
+                # kill the daemon processes
+                for d in daemons:
+                    d.kill()
 
     def run(self):
         """Run the experiment."""
