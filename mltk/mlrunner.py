@@ -455,8 +455,8 @@ class MLRunner(object):
                     proc = p
                     yield proc
             finally:
+                daemon.kill()
                 if proc is not None:
-                    proc.kill()
                     code = proc.poll()
                     if code is not None:
                         getLogger(__name__).info(f'Daemon process {proc.pid} '
