@@ -108,9 +108,7 @@ def exec_proc(args: Union[str, Iterable[str]],
     # patch the kill(), such that it will be killed more definitely
     if sys.platform != 'win32':
         def my_kill(self):
-            print(f'start kill {self.pid}')
             os.kill(self.pid, signal.SIGKILL)
-            print(f'end kill {self.pid}')
         proc.kill = types.MethodType(my_kill, proc)
 
     try:
