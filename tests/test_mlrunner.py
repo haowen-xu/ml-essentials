@@ -1485,15 +1485,15 @@ class JsonFileWatcherTestCase(unittest.TestCase):
             with watcher:
                 write_file_content(path_a, b'{"a": 1}')
                 write_file_content(path_c, b'{"c": 3}')
-                time.sleep(0.15)
+                time.sleep(0.12)
                 write_file_content(path_b, b'{"b": 2}')
-                time.sleep(0.15)
+                time.sleep(0.12)
                 self.assertListEqual(logs, [
                     ('a.json', {'a': 1}), ('b.json', {'b': 2})
                 ])
 
                 write_file_content(path_a, b'{"a": 4}')
-                time.sleep(0.15)
+                time.sleep(0.12)
                 self.assertListEqual(logs, [
                     ('a.json', {'a': 1}), ('b.json', {'b': 2}),
                     ('a.json', {'a': 4})

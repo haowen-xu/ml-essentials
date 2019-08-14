@@ -5,6 +5,7 @@ import sys
 import time
 import types
 from contextlib import contextmanager
+from logging import getLogger
 from threading import Thread
 from typing import *
 
@@ -24,23 +25,23 @@ def timed_wait_proc(proc: subprocess.Popen, timeout: float) -> Optional[int]:
     Returns:
         The exit code, or :obj:`None` if the process does not exit.
     """
-    start_time = time.time()
-    sleep_itv = min(timeout / 20., 1)
-    ret = proc.poll()
-    while ret is None:
-        time.sleep(sleep_itv)
-        if time.time() - start_time >= timeout:
-            break
-        ret = proc.poll()
-    return ret
+    # start_time = time.time()
+    # sleep_itv = min(timeout / 20., 1)
+    # ret = proc.poll()
+    # while ret is None:
+    #     time.sleep(sleep_itv)
+    #     if time.time() - start_time >= timeout:
+    #         break
+    #     ret = proc.poll()
+    # return ret
 
     # Strangely, the following code will cause the process to be waited
     # indefinitely on Linux, if the underlying process is defuncted.
 
-    # try:
-    #     return proc.wait(timeout)
-    # except subprocess.TimeoutExpired:
-    #     return None
+    try:
+        return proc.wait(timeout)
+    except subprocess.TimeoutExpired:
+        return None
 
 
 @contextmanager
@@ -146,7 +147,10 @@ def exec_proc(args: Union[str, Iterable[str]],
                     try:
                         f.close()
                     except Exception:  # pragma: no cover
-                        pass
+                        getLogger(__name__).info(
+                            'Failed to close a sub-process pipe.',
+                            exc_info=True
+                        )
 
         # Wait for the reader threads to exit
         if not giveup_waiting[0]:
@@ -155,5 +159,13 @@ def exec_proc(args: Union[str, Iterable[str]],
                     th.join()
 
         # Ensure all the pipes are closed.
-        if not giveup_waiting[0]:
-            close_pipes()
+        close_pipes()
+
+        # Wait for at most 30 seconds, to ensure the sub-process exits,
+        # in order to avoid defunct process.
+        if giveup_waiting[0]:
+            if timed_wait_proc(proc, 30) is None:
+                getLogger(__name__).info(
+                    'The sub-process did not exit properly, and a defunct '
+                    'process may be generated.'
+                )
