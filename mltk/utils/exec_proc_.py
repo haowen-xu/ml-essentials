@@ -2,7 +2,6 @@ import os
 import signal
 import subprocess
 import sys
-import time
 import types
 from contextlib import contextmanager
 from logging import getLogger
@@ -25,19 +24,6 @@ def timed_wait_proc(proc: subprocess.Popen, timeout: float) -> Optional[int]:
     Returns:
         The exit code, or :obj:`None` if the process does not exit.
     """
-    # start_time = time.time()
-    # sleep_itv = min(timeout / 20., 1)
-    # ret = proc.poll()
-    # while ret is None:
-    #     time.sleep(sleep_itv)
-    #     if time.time() - start_time >= timeout:
-    #         break
-    #     ret = proc.poll()
-    # return ret
-
-    # Strangely, the following code will cause the process to be waited
-    # indefinitely on Linux, if the underlying process is defuncted.
-
     try:
         return proc.wait(timeout)
     except subprocess.TimeoutExpired:
@@ -139,19 +125,6 @@ def exec_proc(args: Union[str, Iterable[str]],
                 proc.kill()
                 giveup_waiting[0] = True
 
-        # Close the pipes such that the reader threads will ensure to exit,
-        # if we decide to give up waiting.
-        def close_pipes():
-            for f in (proc.stdout, proc.stderr, proc.stdin):
-                if f is not None:
-                    try:
-                        f.close()
-                    except Exception:  # pragma: no cover
-                        getLogger(__name__).info(
-                            'Failed to close a sub-process pipe.',
-                            exc_info=True
-                        )
-
         # Wait for the reader threads to exit
         if not giveup_waiting[0]:
             for th in (stdout_thread, stderr_thread):
@@ -159,7 +132,15 @@ def exec_proc(args: Union[str, Iterable[str]],
                     th.join()
 
         # Ensure all the pipes are closed.
-        close_pipes()
+        for f in (proc.stdout, proc.stderr, proc.stdin):
+            if f is not None:
+                try:
+                    f.close()
+                except Exception:  # pragma: no cover
+                    getLogger(__name__).info(
+                        'Failed to close a sub-process pipe.',
+                        exc_info=True
+                    )
 
         # Wait for at most 30 seconds, to ensure the sub-process exits,
         # in order to avoid defunct process.
