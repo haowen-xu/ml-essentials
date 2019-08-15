@@ -97,7 +97,7 @@ def recursive_kill(pid, ctrl_c_timeout: float = 1):
         try:
             p.kill()
         except Exception:
-            getLogger(__name__).info(
+            getLogger(__name__).warning(
                 f'Failed to kill sub-process {p.pid} by SIGKILL, give up.',
                 exc_info=True
             )
