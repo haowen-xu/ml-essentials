@@ -103,7 +103,7 @@ class ExcProcTestCase(unittest.TestCase):
                 ['python', '-u', '-c', interruptable],
                 on_stdout=stdout.write) as proc:
             timed_wait_proc(proc, 1.5)
-        self.assertEqual(b'kbd interrupt\nexited\n', stdout.getvalue())
+        self.assertIn(b'kbd interrupt', stdout.getvalue())
         self.assertEqual(0, proc.poll())
 
         # test non-interruptable, give up waiting

@@ -32,7 +32,7 @@ def timed_wait_proc(proc: subprocess.Popen, timeout: float) -> Optional[int]:
         return None
 
 
-def recursive_kill(pid, ctrl_c_timeout: float = 1):
+def recursive_kill(pid, ctrl_c_timeout: float = 3, kill_timeout: float = 10):
     """
     Recursively kill a process tree.
 
@@ -40,6 +40,7 @@ def recursive_kill(pid, ctrl_c_timeout: float = 1):
         pid: The process id.
         ctrl_c_timeout: Seconds to wait for the program to respond to
             CTRL+C signal.
+        kill_timeout: Seconds to wait for the program to be killed.
     """
     ctrl_c_event = (signal.SIGINT if sys.platform != 'win32'
                     else signal.CTRL_C_EVENT)
@@ -52,41 +53,35 @@ def recursive_kill(pid, ctrl_c_timeout: float = 1):
     not_interrupted = []
 
     for p in reversed(children):
+        err_msg = f'Failed to kill sub-process {p.pid} by SIGINT, ' \
+                  f'plan to kill it and all other sub-processes by ' \
+                  f'SIGTERM or SIGKILL.'
         try:
             p.send_signal(ctrl_c_event)
             (gone, alive) = psutil.wait_procs([p], timeout=ctrl_c_timeout)
             if alive:
                 not_interrupted.append(p)
-                getLogger(__name__).info(
-                    f'Failed to kill sub-process {p.pid} by SIGINT, '
-                    f'plan to kill it by SIGTERM or SIGKILL.')
+                getLogger(__name__).info(err_msg)
+                break
         except Exception:  # pragma: no cover
-            getLogger(__name__).info(
-                f'Failed to kill sub-process {p.pid} by SIGINT, '
-                f'plan to kill it by SIGTERM or SIGKILL.',
-                exc_info=True
-            )
+            getLogger(__name__).info(err_msg, exc_info=True)
             not_interrupted.append(p)
+            break
 
     # second, attempt to kill the processes by SIGTERM
     if sys.platform != 'win32':
+        err_msg = f'Failed to kill sub-process {p.pid} by SIGTERM, ' \
+                  f'plan to kill it by SIGKILL.'
         not_terminated = []
-
         for p in not_interrupted:  # pragma: no cover
             try:
                 p.send_signal(signal.SIGTERM)
-                (gone, alive) = psutil.wait_procs([p], timeout=ctrl_c_timeout)
-                if alive:
+                (gone, alive) = psutil.wait_procs([p], timeout=kill_timeout)
+                if alive:  # pragma: no cover
                     not_terminated.append(p)
-                    getLogger(__name__).info(
-                        f'Failed to kill sub-process {p.pid} by SIGTERM, '
-                        f'plan to kill it by SIGKILL.')
+                    getLogger(__name__).info(err_msg)
             except Exception:  # pragma: no cover
-                getLogger(__name__).info(
-                    f'Failed to kill sub-process {p.pid} by SIGTERM, '
-                    f'plan to kill it by SIGKILL.',
-                    exc_info=True
-                )
+                getLogger(__name__).info(err_msg, exc_info=True)
                 not_terminated.append(p)
 
     else:  # pragma: no cover
@@ -94,13 +89,14 @@ def recursive_kill(pid, ctrl_c_timeout: float = 1):
 
     # finally, kill the processes by SIGKILL
     for p in not_terminated:  # pragma: no cover
+        err_msg = f'Failed to kill sub-process {p.pid} by SIGKILL, give up.'
         try:
             p.kill()
+            (gone, alive) = psutil.wait_procs([p], timeout=kill_timeout)
+            if alive:
+                getLogger(__name__).warning(err_msg)
         except Exception:
-            getLogger(__name__).warning(
-                f'Failed to kill sub-process {p.pid} by SIGKILL, give up.',
-                exc_info=True
-            )
+            getLogger(__name__).warning(err_msg, exc_info=True)
 
 
 @contextmanager
@@ -109,7 +105,7 @@ def exec_proc(args: Union[str, Iterable[str]],
               on_stderr: OutputCallbackType = None,
               stderr_to_stdout: bool = False,
               buffer_size: int = 16 * 1024,
-              ctrl_c_timeout: float = 1,
+              ctrl_c_timeout: float = 3,
               **kwargs) -> Generator[subprocess.Popen, None, None]:
     """
     Execute an external program within a context.

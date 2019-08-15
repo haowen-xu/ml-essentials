@@ -1181,7 +1181,7 @@ class ProgramHost(object):
         """Get the managed process object."""
         return self._proc
 
-    def kill(self, ctrl_c_timeout: float = 1):
+    def kill(self, ctrl_c_timeout: float = 3):
         """
         Kill the process if it is running.
 
