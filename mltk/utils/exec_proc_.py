@@ -8,6 +8,8 @@ from logging import getLogger
 from threading import Thread
 from typing import *
 
+import psutil
+
 __all__ = ['timed_wait_proc', 'exec_proc']
 
 OutputCallbackType = Callable[[bytes], None]
@@ -30,13 +32,84 @@ def timed_wait_proc(proc: subprocess.Popen, timeout: float) -> Optional[int]:
         return None
 
 
+def recursive_kill(pid, ctrl_c_timeout: float = 1):
+    """
+    Recursively kill a process tree.
+
+    Args:
+        pid: The process id.
+        ctrl_c_timeout: Seconds to wait for the program to respond to
+            CTRL+C signal.
+    """
+    ctrl_c_event = (signal.SIGINT if sys.platform != 'win32'
+                    else signal.CTRL_C_EVENT)
+
+    parent = psutil.Process(pid)
+    children = parent.children(recursive=True)
+    children.insert(0, parent)
+
+    # first, attempt to kill the processes by ctrl+c
+    not_interrupted = []
+
+    for p in reversed(children):
+        try:
+            p.send_signal(ctrl_c_event)
+            (gone, alive) = psutil.wait_procs([p], timeout=ctrl_c_timeout)
+            if alive:
+                not_interrupted.append(p)
+                getLogger(__name__).info(
+                    f'Failed to kill sub-process {p.pid} by SIGINT, '
+                    f'plan to kill it by SIGTERM or SIGKILL.')
+        except Exception:  # pragma: no cover
+            getLogger(__name__).info(
+                f'Failed to kill sub-process {p.pid} by SIGINT, '
+                f'plan to kill it by SIGTERM or SIGKILL.',
+                exc_info=True
+            )
+            not_interrupted.append(p)
+
+    # second, attempt to kill the processes by SIGTERM
+    if sys.platform != 'win32':
+        not_terminated = []
+
+        for p in not_interrupted:  # pragma: no cover
+            try:
+                p.send_signal(signal.SIGTERM)
+                (gone, alive) = psutil.wait_procs([p], timeout=ctrl_c_timeout)
+                if alive:
+                    not_terminated.append(p)
+                    getLogger(__name__).info(
+                        f'Failed to kill sub-process {p.pid} by SIGTERM, '
+                        f'plan to kill it by SIGKILL.')
+            except Exception:  # pragma: no cover
+                getLogger(__name__).info(
+                    f'Failed to kill sub-process {p.pid} by SIGTERM, '
+                    f'plan to kill it by SIGKILL.',
+                    exc_info=True
+                )
+                not_terminated.append(p)
+
+    else:  # pragma: no cover
+        not_terminated = not_interrupted
+
+    # finally, kill the processes by SIGKILL
+    for p in not_terminated:  # pragma: no cover
+        try:
+            p.kill()
+        except Exception:
+            getLogger(__name__).info(
+                f'Failed to kill sub-process {p.pid} by SIGKILL, give up.',
+                exc_info=True
+            )
+
+
 @contextmanager
 def exec_proc(args: Union[str, Iterable[str]],
               on_stdout: OutputCallbackType = None,
               on_stderr: OutputCallbackType = None,
               stderr_to_stdout: bool = False,
               buffer_size: int = 16 * 1024,
-              ctrl_c_timeout: int = 3,
+              ctrl_c_timeout: float = 1,
               **kwargs) -> Generator[subprocess.Popen, None, None]:
     """
     Execute an external program within a context.
@@ -67,7 +140,7 @@ def exec_proc(args: Union[str, Iterable[str]],
 
     # output reader
     def reader_func(fd, action):
-        while not giveup_waiting[0]:
+        while not stopped[0]:
             buf = os.read(fd, buffer_size)
             if not buf:
                 break
@@ -80,7 +153,7 @@ def exec_proc(args: Union[str, Iterable[str]],
         return th
 
     # internal flags
-    giveup_waiting = [False]
+    stopped = [False]
 
     # launch the process
     stdout_thread = None  # type: Thread
@@ -90,13 +163,15 @@ def exec_proc(args: Union[str, Iterable[str]],
     else:
         args = tuple(args)
         shell = False
+
     proc = subprocess.Popen(args, shell=shell, **kwargs)
 
-    # patch the kill(), such that it will be killed more definitely
-    if sys.platform != 'win32':
-        def my_kill(self):
-            os.kill(self.pid, signal.SIGKILL)
-        proc.kill = types.MethodType(my_kill, proc)
+    # patch the kill() to ensure the whole process group would be killed,
+    # in case `shell = True`.
+    def my_kill(self, ctrl_c_timeout=ctrl_c_timeout):
+        recursive_kill(int(self.pid), ctrl_c_timeout=ctrl_c_timeout)
+
+    proc.kill = types.MethodType(my_kill, proc)
 
     try:
         if on_stdout is not None:
@@ -116,20 +191,13 @@ def exec_proc(args: Union[str, Iterable[str]],
 
     finally:
         if proc.poll() is None:
-            # First, try to interrupt the process with Ctrl+C signal
-            ctrl_c_signal = (signal.SIGINT if sys.platform != 'win32'
-                             else signal.CTRL_C_EVENT)
-            os.kill(proc.pid, ctrl_c_signal)
-            if timed_wait_proc(proc, ctrl_c_timeout) is None:
-                # If the Ctrl+C signal does not work, terminate it.
-                proc.kill()
-                giveup_waiting[0] = True
+            proc.kill()
 
         # Wait for the reader threads to exit
-        if not giveup_waiting[0]:
-            for th in (stdout_thread, stderr_thread):
-                if th is not None:
-                    th.join()
+        stopped[0] = True
+        for th in (stdout_thread, stderr_thread):
+            if th is not None:
+                th.join()
 
         # Ensure all the pipes are closed.
         for f in (proc.stdout, proc.stderr, proc.stdin):
@@ -141,12 +209,3 @@ def exec_proc(args: Union[str, Iterable[str]],
                         'Failed to close a sub-process pipe.',
                         exc_info=True
                     )
-
-        # Wait for at most 30 seconds, to ensure the sub-process exits,
-        # in order to avoid defunct process.
-        if giveup_waiting[0]:
-            if timed_wait_proc(proc, 30) is None:
-                getLogger(__name__).info(
-                    'The sub-process did not exit properly, and a defunct '
-                    'process may be generated.'
-                )

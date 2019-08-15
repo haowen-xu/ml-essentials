@@ -1181,7 +1181,7 @@ class ProgramHost(object):
         """Get the managed process object."""
         return self._proc
 
-    def kill(self, ctrl_c_timeout: float = 3):
+    def kill(self, ctrl_c_timeout: float = 1):
         """
         Kill the process if it is running.
 
@@ -1190,12 +1190,8 @@ class ProgramHost(object):
         it will kill the process by SIGKILL (or terminate on windows).
         """
         if self.proc is not None and self.proc.poll() is None:
-            ctrl_c_signal = (signal.SIGINT if sys.platform != 'win32'
-                             else signal.CTRL_C_EVENT)
             try:
-                self.proc.send_signal(ctrl_c_signal)
-                if timed_wait_proc(self.proc, ctrl_c_timeout) is None:
-                    self.proc.kill()  # pragma: no cover
+                self.proc.kill(ctrl_c_timeout=ctrl_c_timeout)
             except ProcessLookupError:  # pragma: no cover
                 # which indicates the process has exited
                 pass

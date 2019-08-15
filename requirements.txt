@@ -5,6 +5,7 @@ heapdict >= 1.0.0
 idx2numpy >= 1.2.2
 numpy >= 1.16.2
 pprint >= 0.1
+psutil >= 5.4.7
 PyMongo >= 3.8.0
 PyYAML >= 3.13
 requests >= 2.19.1
