@@ -24,11 +24,11 @@ from urllib.parse import urlsplit, urlunsplit, SplitResult
 
 import click
 
-from .config import Config, ConfigLoader, deep_copy
+from .config import Config, ConfigLoader, deep_copy, format_key_values
 from .events import EventHost, Event
 from .mlstorage import (DocumentType, MLStorageClient, IdType,
                         normalize_relpath)
-from .utils import exec_proc, timed_wait_proc, json_loads
+from .utils import exec_proc, json_loads
 
 __all__ = ['MLRunnerConfig', 'MLRunner']
 
@@ -680,6 +680,9 @@ class MLRunner(object):
               is_flag=True, required=False, default=None,
               help='Whether or not to parse the output of experiment and '
                    'daemon processes?')
+@click.option('--print-config', 'print_config',
+              is_flag=True, required=False, default=False,
+              help='Print the configuration, then exit.')
 @click.option('-D', '--daemon', required=False, multiple=True,
               help='Specify the shell command of daemon processes, to be '
                    'executed along with the main experiment process.')
@@ -693,7 +696,7 @@ class MLRunner(object):
 @click.argument('args', nargs=-1)
 def mlrun(config_file, name, description, tags, env, gpu, work_dir, server,
           resume_from, clone_from, copy_source, source_archive, parse_stdout,
-          daemon, tensorboard, command, args):
+          print_config, daemon, tensorboard, command, args):
     """
     Run an experiment.
 
@@ -815,6 +818,11 @@ def mlrun(config_file, name, description, tags, env, gpu, work_dir, server,
 
     config_loader.load_object(cli_config)
     config = config_loader.get()
+
+    # if "--print-config", print the config and then exit
+    if print_config:  # pragma: no cover
+        print(format_key_values(config, title='Configurations'))
+        sys.exit(0)
 
     # now create the runner and run
     runner = MLRunner(config)
