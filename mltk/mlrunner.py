@@ -1108,7 +1108,7 @@ class StdoutParser(object):
                         g = m.groupdict()
                         name = g['name'].decode('utf-8').strip()
                         mean = g['mean'].decode('utf-8').strip()
-                        if g['std'] is not None:
+                        if g.get('std', None) is not None:
                             std = g['std'].decode('utf-8').strip()
                         else:
                             std = None
