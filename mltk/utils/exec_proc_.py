@@ -8,8 +8,6 @@ from logging import getLogger
 from threading import Thread
 from typing import *
 
-import psutil
-
 __all__ = ['timed_wait_proc', 'exec_proc']
 
 OutputCallbackType = Callable[[bytes], None]
@@ -32,71 +30,54 @@ def timed_wait_proc(proc: subprocess.Popen, timeout: float) -> Optional[int]:
         return None
 
 
-def recursive_kill(pid, ctrl_c_timeout: float = 3, kill_timeout: float = 10):
+def recursive_kill(proc: subprocess.Popen,
+                   ctrl_c_timeout: float = 3,
+                   kill_timeout: float = 10) -> Optional[int]:
     """
     Recursively kill a process tree.
 
     Args:
-        pid: The process id.
+        proc: The process to kill.
         ctrl_c_timeout: Seconds to wait for the program to respond to
             CTRL+C signal.
         kill_timeout: Seconds to wait for the program to be killed.
+
+    Returns:
+        The return code, or None if the process cannot be killed.
     """
+    try:
+        gid = os.getpgid(proc.pid)
+    except Exception:
+        # indicate pid does not exist
+        return
+
+    # try to kill the process by ctrl+c
     ctrl_c_event = (signal.SIGINT if sys.platform != 'win32'
                     else signal.CTRL_C_EVENT)
+    os.killpg(gid, ctrl_c_event)
+    code = timed_wait_proc(proc, ctrl_c_timeout)
+    if code is None:
+        print(f'Failed to kill sub-process {proc.pid} by SIGINT, plan to kill '
+              f'it by SIGTERM.')
+    else:
+        return code
 
-    parent = psutil.Process(pid)
-    children = parent.children(recursive=True)
-    children.insert(0, parent)
+    # try to kill the process by SIGTERM
+    os.killpg(gid, signal.SIGTERM)
+    code = timed_wait_proc(proc, kill_timeout)
+    if code is None:
+        print(f'Failed to kill sub-process {proc.pid} by SIGTERM, plan to kill '
+              f'it by SIGKILL.')
+    else:
+        return code
 
-    # first, attempt to kill the processes by ctrl+c
-    not_interrupted = []
+    # try to kill the process by SIGKILL
+    os.killpg(gid, signal.SIGKILL)
+    code = timed_wait_proc(proc, kill_timeout)
+    if code is None:
+        print(f'Failed to kill sub-process {proc.pid} by SIGKILL, give up.')
 
-    for p in reversed(children):
-        err_msg = f'Failed to kill sub-process {p.pid} by SIGINT, ' \
-                  f'plan to kill it and all other sub-processes by ' \
-                  f'SIGTERM or SIGKILL.'
-        try:
-            p.send_signal(ctrl_c_event)
-            (gone, alive) = psutil.wait_procs([p], timeout=ctrl_c_timeout)
-            if alive:
-                not_interrupted.append(p)
-                getLogger(__name__).info(err_msg)
-                break
-        except Exception:  # pragma: no cover
-            getLogger(__name__).info(err_msg, exc_info=True)
-            not_interrupted.append(p)
-            break
-
-    # second, attempt to kill the processes by SIGTERM
-    if sys.platform != 'win32':
-        err_msg = f'Failed to kill sub-process {p.pid} by SIGTERM, ' \
-                  f'plan to kill it by SIGKILL.'
-        not_terminated = []
-        for p in not_interrupted:  # pragma: no cover
-            try:
-                p.send_signal(signal.SIGTERM)
-                (gone, alive) = psutil.wait_procs([p], timeout=kill_timeout)
-                if alive:  # pragma: no cover
-                    not_terminated.append(p)
-                    getLogger(__name__).info(err_msg)
-            except Exception:  # pragma: no cover
-                getLogger(__name__).info(err_msg, exc_info=True)
-                not_terminated.append(p)
-
-    else:  # pragma: no cover
-        not_terminated = not_interrupted
-
-    # finally, kill the processes by SIGKILL
-    for p in not_terminated:  # pragma: no cover
-        err_msg = f'Failed to kill sub-process {p.pid} by SIGKILL, give up.'
-        try:
-            p.kill()
-            (gone, alive) = psutil.wait_procs([p], timeout=kill_timeout)
-            if alive:
-                getLogger(__name__).warning(err_msg)
-        except Exception:
-            getLogger(__name__).warning(err_msg, exc_info=True)
+    return code
 
 
 @contextmanager
@@ -160,12 +141,14 @@ def exec_proc(args: Union[str, Iterable[str]],
         args = tuple(args)
         shell = False
 
+    if sys.platform != 'win32':
+        kwargs.setdefault('preexec_fn', os.setsid)
     proc = subprocess.Popen(args, shell=shell, **kwargs)
 
     # patch the kill() to ensure the whole process group would be killed,
     # in case `shell = True`.
     def my_kill(self, ctrl_c_timeout=ctrl_c_timeout):
-        recursive_kill(int(self.pid), ctrl_c_timeout=ctrl_c_timeout)
+        recursive_kill(self, ctrl_c_timeout=ctrl_c_timeout)
 
     proc.kill = types.MethodType(my_kill, proc)
 
