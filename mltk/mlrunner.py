@@ -6,7 +6,6 @@ import os
 import re
 import shlex
 import shutil
-import signal
 import socket
 import stat
 import subprocess
@@ -119,6 +118,10 @@ class MLRunnerConfig(Config):
 
     class integration(Config):
         parse_stdout: bool = True
+
+        class stdout_pattern(Config):
+            mltk: Optional[str] = None
+            mltk_metric: Optional[str] = None
 
         config_file: str = 'config.json'
         default_config_file: str = 'config.defaults.json'
@@ -970,12 +973,17 @@ class StdoutParser(object):
     >>> parser.parse_line(b'[Epoch 1/10, Step 5]' + b' ' * 2048)
     """
 
-    def __init__(self, max_parse_length: int = 2048):
+    def __init__(self,
+                 max_parse_length: int = 2048,
+                 mltk_pattern: Optional[str] = None,
+                 mltk_metric_pattern: Optional[str] = None):
         """
         Construct a new :class:`StdoutParser`.
 
         Args:
             max_parse_length: The maximum length of line to parse.
+            mltk_pattern: The regex pattern for the overall MLTK logs.
+            mltk_metric_pattern: The regex pattern for the metrics in MLTK logs.
         """
         self._max_parse_length = max_parse_length
         self._events = EventHost()
@@ -986,19 +994,29 @@ class StdoutParser(object):
         self._line_buffer = None
 
         # patterns for parsing tfsnippet & mltk logs
-        self._mltk_pattern = re.compile(
-            rb'^\['
-            rb'(?:Epoch (?P<epoch>\d+)(?:/(?P<max_epoch>\d+))?)?[, ]*'
-            rb'(?:Step (?P<step>\d+)(?:/(?P<max_step>\d+))?)?[, ]*'
-            rb'(?:ETA (?P<eta>[0-9\.e+ dhms]+))?'
-            rb'\]\s*'
-            rb'(?P<metrics>.*?)\s*(?:\(\*\))?\s*'
-            rb'$'
-        )
-        self._mltk_metric_pattern = re.compile(
-            rb'^\s*(?P<name>[^:]+): (?P<mean>[^()]+)'
-            rb'(?: \(\xc2\xb1(?P<std>[^()]+)\))?\s*$'
-        )
+        if mltk_pattern is None:
+            mltk_pattern = (
+                rb'^\['
+                rb'(?:Epoch (?P<epoch>\d+)(?:/(?P<max_epoch>\d+))?)?[, ]*'
+                rb'(?:Step (?P<step>\d+)(?:/(?P<max_step>\d+))?)?[, ]*'
+                rb'(?:ETA (?P<eta>[0-9\.e+ dhms]+))?'
+                rb'\]\s*'
+                rb'(?P<metrics>.*?)\s*(?:\(\*\))?\s*'
+                rb'$'
+            )
+        else:
+            mltk_pattern = str(mltk_pattern).encode('utf-8')
+
+        if mltk_metric_pattern is None:
+            mltk_metric_pattern = (
+                rb'^\s*(?P<name>[^:]+): (?P<mean>[^()]+)'
+                rb'(?: \(\xc2\xb1(?P<std>[^()]+)\))?\s*$'
+            )
+        else:
+            mltk_metric_pattern = str(mltk_metric_pattern).encode('utf-8')
+
+        self._mltk_pattern = re.compile(mltk_pattern)
+        self._mltk_metric_pattern = re.compile(mltk_metric_pattern)
 
         # pattern for parsing tensorboard log
         self._webui_pattern = re.compile(

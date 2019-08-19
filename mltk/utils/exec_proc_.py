@@ -65,8 +65,9 @@ def recursive_kill(proc: subprocess.Popen,
     kill_fn(signal.SIGINT)
     code = timed_wait_proc(proc, ctrl_c_timeout)
     if code is None:
-        print(f'Failed to kill sub-process {proc.pid} by SIGINT, plan to kill '
-              f'it by SIGTERM or SIGKILL.')
+        getLogger(__name__).info(
+            f'Failed to kill sub-process {proc.pid} by SIGINT, plan to kill '
+            f'it by SIGTERM or SIGKILL.')
     else:
         return code
 
@@ -75,8 +76,9 @@ def recursive_kill(proc: subprocess.Popen,
         kill_fn(signal.SIGTERM)
         code = timed_wait_proc(proc, kill_timeout)
         if code is None:
-            print(f'Failed to kill sub-process {proc.pid} by SIGTERM, plan to '
-                  f'kill it by SIGKILL.')
+            getLogger(__name__).info(
+                f'Failed to kill sub-process {proc.pid} by SIGTERM, plan to '
+                f'kill it by SIGKILL.')
         else:
             return code
 
@@ -84,7 +86,8 @@ def recursive_kill(proc: subprocess.Popen,
     kill_fn(signal.SIGKILL)
     code = timed_wait_proc(proc, kill_timeout)
     if code is None:
-        print(f'Failed to kill sub-process {proc.pid} by SIGKILL, give up.')
+        getLogger(__name__).info(
+            f'Failed to kill sub-process {proc.pid} by SIGKILL, give up.')
 
     return code
 

@@ -69,6 +69,7 @@ class ConfigField(object):
                  nullable: bool = True,
                  choices: Optional[Iterable] = None,
                  envvar: Optional[str] = None,
+                 ignore_empty_env: bool = True,
                  validator_fn: Optional[ValidatorFunctionType] = None):
         """
         Construct a new :class:`ConfigField`.
@@ -82,6 +83,8 @@ class ConfigField(object):
             choices: Optional valid choices for the config value.
             envvar: Key of the environment variable, used as the default
                 value for this config field.
+            ignore_empty_env: Whether or not to ignore empty values from
+                the environmental variable?
             validator_fn: Custom validator function for input values.
         """
         nullable = bool(nullable)
@@ -92,6 +95,7 @@ class ConfigField(object):
         self._nullable = nullable
         self._choices = tuple(choices) if choices is not None else None
         self._envvar = envvar
+        self._ignore_empty_env = ignore_empty_env
         self._validator_fn = validator_fn
 
     def __repr__(self):
@@ -137,11 +141,19 @@ class ConfigField(object):
         the value from the environment variable will be used instead of
         the value of ``self.default_value``.
         """
+        # try to get the value from env var
+        val = None
+
         if self.envvar is not None and self.envvar in os.environ:
-            validator = get_validator(self)
-            return validator.validate(os.environ[self.envvar])
-        else:
-            return deep_copy(self._default_value)
+            val = os.environ.get(self.envvar)
+            if not val and self.ignore_empty_env:
+                val = None
+
+        if val is not None:
+            return get_validator(self).validate(os.environ[self.envvar])
+
+        # otherwise return the default value configured in code
+        return deep_copy(self._default_value)
 
     @property
     def description(self) -> Optional[str]:
@@ -162,6 +174,13 @@ class ConfigField(object):
     def envvar(self) -> Optional[str]:
         """Get the key of the environment variable."""
         return self._envvar
+
+    @property
+    def ignore_empty_env(self) -> bool:
+        """
+        Whether or not to ignore empty values from the environmental variable?
+        """
+        return self._ignore_empty_env
 
     @property
     def validator_fn(self) -> Optional[ValidatorFunctionType]:

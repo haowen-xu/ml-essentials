@@ -149,6 +149,17 @@ class ConfigTestCase(unittest.TestCase):
         with set_environ_context(MY_FIELD='hello'):
             self.assertEqual(field.get_default_value(), 'hello')
 
+        # test dealing with empty envvar
+        field = ConfigField(envvar='MY_FIELD', default='123')
+        with set_environ_context(MY_FIELD=''):
+            self.assertEqual(field.get_default_value(), '123')
+
+        field = ConfigField(envvar='MY_FIELD', default='123',
+                            ignore_empty_env=False)
+        with set_environ_context(MY_FIELD=''):
+            self.assertEqual(field.get_default_value(), '')
+
+
     def test_Config_envvar(self):
         class MyConfig(Config):
             value = ConfigField(int, default=1, envvar='MY_FIELD')
