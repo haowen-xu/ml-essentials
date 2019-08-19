@@ -766,7 +766,7 @@ def mlrun(config_file, name, description, tags, env, gpu, work_dir, server,
     logging.basicConfig(level='INFO', format=LOG_FORMAT)
 
     # load configuration from files
-    config_loader = MLRunnerConfigLoader(config_files=config_file)
+    config_loader = MLRunnerConfigLoader(config_files=config_file, work_dir='.')
     config_loader.load_config_files(
         lambda path: getLogger(__name__).info(
             'Load runner configuration from: %s', path)
