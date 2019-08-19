@@ -45,34 +45,43 @@ def recursive_kill(proc: subprocess.Popen,
     Returns:
         The return code, or None if the process cannot be killed.
     """
-    try:
-        gid = os.getpgid(proc.pid)
-    except Exception:
-        # indicate pid does not exist
-        return
+    if sys.platform != 'win32':
+        try:
+            gid = os.getpgid(proc.pid)
+        except Exception:
+            # indicate pid does not exist
+            return
+
+        def kill_fn(s):
+            os.killpg(gid, s)
+    else:  # pragma: no cover
+        def kill_fn(s):
+            if s == signal.SIGINT:
+                os.kill(proc.pid, signal.CTRL_C_EVENT)
+            else:
+                proc.terminate()
 
     # try to kill the process by ctrl+c
-    ctrl_c_event = (signal.SIGINT if sys.platform != 'win32'
-                    else signal.CTRL_C_EVENT)
-    os.killpg(gid, ctrl_c_event)
+    kill_fn(signal.SIGINT)
     code = timed_wait_proc(proc, ctrl_c_timeout)
     if code is None:
         print(f'Failed to kill sub-process {proc.pid} by SIGINT, plan to kill '
-              f'it by SIGTERM.')
+              f'it by SIGTERM or SIGKILL.')
     else:
         return code
 
     # try to kill the process by SIGTERM
-    os.killpg(gid, signal.SIGTERM)
-    code = timed_wait_proc(proc, kill_timeout)
-    if code is None:
-        print(f'Failed to kill sub-process {proc.pid} by SIGTERM, plan to kill '
-              f'it by SIGKILL.')
-    else:
-        return code
+    if sys.platform != 'win32':
+        kill_fn(signal.SIGTERM)
+        code = timed_wait_proc(proc, kill_timeout)
+        if code is None:
+            print(f'Failed to kill sub-process {proc.pid} by SIGTERM, plan to '
+                  f'kill it by SIGKILL.')
+        else:
+            return code
 
     # try to kill the process by SIGKILL
-    os.killpg(gid, signal.SIGKILL)
+    kill_fn(signal.SIGKILL)
     code = timed_wait_proc(proc, kill_timeout)
     if code is None:
         print(f'Failed to kill sub-process {proc.pid} by SIGKILL, give up.')
