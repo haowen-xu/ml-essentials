@@ -224,6 +224,16 @@ class MLRunnerConfigLoaderTestCase(unittest.TestCase):
                 args='exit 0'
             ))
 
+            # test error on non-exist user specified config file
+            loader = MLRunnerConfigLoader(
+                config_files=[
+                    os.path.join(temp_dir, 'not-exist.yml')
+                ]
+            )
+            with pytest.raises(IOError, match='User specified config file '
+                                              '.* does not exist'):
+                loader.load_config_files()
+
 
 class MockMLServer(object):
 
@@ -743,12 +753,12 @@ class PatchedMLRunnerConfigLoader(MLRunnerConfigLoader):
 
     last_instance: 'PatchedMLRunnerConfigLoader' = None
 
-    def __init__(self, config_files):
-        super().__init__(config_files=config_files)
+    def __init__(self, config_files, **kwargs):
+        super().__init__(config_files=config_files, **kwargs)
         self.__class__.last_instance = self
         self.loaded = False
 
-    def load_config_files(self, on_load = None):
+    def load_config_files(self, on_load=None):
         super().load_config_files(on_load)
         self.loaded = True
 
@@ -808,7 +818,6 @@ class MLRunTestCase(unittest.TestCase):
                     '--resume-from=xyzz',
                     '--clone-from=zyxx',
                 ])
-                print(result)
                 self.assertEqual(result.exit_code, 0)
                 config = PatchedMLRunner.last_instance.config
                 self.assertEqual(config, MLRunnerConfig(
