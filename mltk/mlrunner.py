@@ -355,7 +355,11 @@ class MLRunner(object):
             self.doc.update({'webui': webui})
 
     def _create_log_parser(self):
-        parser = StdoutParser()
+        stdout_pattern = self.config.integration.stdout_pattern
+        parser = StdoutParser(
+            mltk_pattern=stdout_pattern.mltk or None,
+            mltk_metric_pattern=stdout_pattern.mltk_metric or None,
+        )
         parser.on_mltk_log.do(self._on_mltk_log)
         parser.on_webui_log.do(self._on_webui_log)
         return parser
