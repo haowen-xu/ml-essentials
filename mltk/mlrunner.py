@@ -1091,9 +1091,9 @@ class StdoutParser(object):
             # the progress
             progress = {}
             for key in ('epoch', 'max_epoch', 'step', 'max_step'):
-                if g[key] is not None:
+                if g.get(key, None) is not None:
                     progress[key] = int(g[key])
-            if g['eta'] is not None:
+            if g.get('eta', None) is not None:
                 progress['eta'] = g['eta'].decode('utf-8').strip()
 
             # the metrics
