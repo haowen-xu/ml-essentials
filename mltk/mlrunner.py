@@ -914,6 +914,9 @@ class MLRunnerConfigLoader(ConfigLoader[MLRunnerConfig]):
         # check the user files
         if self._user_config_files:
             for f_path in reversed(self._user_config_files):
+                if not os.path.isfile(f_path):
+                    raise IOError(f'User specified config file {f_path} does '
+                                  f'not exist.')
                 try_add(f_path)
 
         # check the work directory
