@@ -13,7 +13,11 @@ JSON_OPTIONS.strict_uuid = False  # do not move it to the constructor above!
 
 
 def _json_convert(o: Any) -> Any:
-    if hasattr(o, 'items'):
+    if isinstance(o, bool):
+        # special fix: bool is subclass of int, we do not want to convert True
+        # to 1, so we need to fix it.
+        return o
+    elif hasattr(o, 'items'):
         return SON((k, _json_convert(v)) for k, v in o.items())
     elif hasattr(o, '__iter__') and not isinstance(o, (str, bytes, np.ndarray)):
         return list(_json_convert(v) for v in o)
@@ -38,6 +42,8 @@ def json_dumps(o: Any, *, separators: Tuple[str, str] = (',', ':'),
     :func:`bson.json_util.dumps` to do the remaining things.
     Thus it is compatible with MongoDB types.
 
+    >>> json_dumps([True, False])
+    '[true,false]'
     >>> json_dumps(np.concatenate([np.arange(5), [np.nan]], axis=0))
     '[0.0,1.0,2.0,3.0,4.0,{"$numberDouble":"NaN"}]'
     >>> json_dumps({'values': [np.float(0.1), np.int(2)]})

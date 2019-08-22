@@ -817,12 +817,14 @@ def mlrun(config_file, name, description, tags, env, gpu, work_dir, server,
         'daemon': daemon or None,
         'args': command or args,
     }
-    cli_config = {k: v for k, v in cli_config.items()
-                  if v is not None}
 
     # special fix for empty envvar "MLSTORAGE_SERVER_URI"
     if not cli_config['server']:  # pragma: no cover
         cli_config.pop('server')
+
+    # remove all None entries
+    cli_config = {k: v for k, v in cli_config.items()
+                  if v is not None}
 
     config_loader.load_object(cli_config)
     config = config_loader.get()
