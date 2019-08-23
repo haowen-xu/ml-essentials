@@ -203,6 +203,24 @@ class MLStorageClient(object):
         self._update_storage_dir_cache(ret)
         return ret
 
+    def add_tags(self, id: IdType, tags: Iterable[str]) -> DocumentType:
+        """
+        Add tags to an experiment document.
+
+        Args:
+            id: ID of the experiment.
+            tags: New tags to be added.
+
+        Returns:
+            The document of the updated experiment.
+        """
+        old_doc = self.get(id)
+        new_tags = old_doc.get('tags', [])
+        for tag in tags:
+            if tag not in new_tags:
+                new_tags.append(tag)
+        return self.update(id, {'tags': new_tags})
+
     def delete(self, id: IdType) -> List[IdType]:
         """
         Delete an experiment.

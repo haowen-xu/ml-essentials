@@ -132,6 +132,50 @@ class MLStorageClientTestCase(unittest.TestCase):
         self.assertTrue(heartbeat_received[0])
 
     @httpretty.activate
+    def test_add_tags(self):
+        object_id = str(ObjectId())
+        doc_fields = {
+            'uuid': uuid.uuid4(),
+            'name': 'hello',
+            'storage_dir': f'/{object_id}',
+        }
+
+        def callback(request, uri, response_headers):
+            response_headers[
+                'content-type'] = 'application/json; charset=utf-8'
+            o = {'_id': object_id}
+            o.update(doc_fields)
+            return [200, response_headers, json_dumps(o)]
+
+        httpretty.register_uri(
+            httpretty.GET, f'http://127.0.0.1/v1/_get/{object_id}',
+            body=callback
+        )
+
+        # test add_tags
+        doc_fields['tags'] = ['abc', '123']
+
+        def callback(request, uri, response_headers):
+            content_type = request.headers.get('Content-Type').split(';', 1)[0]
+            self.assertEqual(content_type, 'application/json')
+            fields = json_loads(request.body)
+            self.assertDictEqual(
+                fields, {'tags': ['abc', '123', 'hello, world!']})
+            o = {'_id': object_id}
+            o.update(doc_fields)
+            response_headers['content-type'] = 'application/json; charset=utf-8'
+            return [200, response_headers, json_dumps(o)]
+
+        httpretty.register_uri(
+            httpretty.POST, f'http://127.0.0.1/v1/_update/{object_id}',
+            body=callback
+        )
+        ret = self.client.add_tags(object_id, ['hello, world!', '123'])
+        expected = {'_id': object_id}
+        expected.update(doc_fields)
+        self.assertDictEqual(ret, expected)
+
+    @httpretty.activate
     def test_create_update_delete(self):
         object_id = str(ObjectId())
         doc_fields = {
