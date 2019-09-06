@@ -263,25 +263,31 @@ class ConfigLoaderTestCase(unittest.TestCase):
         class Nested3(Config):
             c = 789
 
+        class Nested4(Config):
+            e = 101112
+
         class MyConfig(Config):
             class nested1(Config):
                 a = 123
 
             nested2 = ConfigField(Nested2)
             nested3 = Nested3()
+            nested4 = ConfigField(default=Nested4())
 
         loader = ConfigLoader(MyConfig)
         loader.load_object({
             'nested1': Config(a=1230),
             'nested2.b': 4560,
             'nested3.c': 7890,
-            'nested3': {'d': 'hello'}
+            'nested3': {'d': 'hello'},
+            'nested4': {'e': 1011120}
         })
         self.assertEqual(
             loader.get(),
             MyConfig(nested1=MyConfig.nested1(a=1230),
                      nested2=Nested2(b=4560.0),
-                     nested3=Nested3(c=7890, d='hello'))
+                     nested3=Nested3(c=7890, d='hello'),
+                     nested4=Nested4(e=1011120))
         )
 
         loader2 = ConfigLoader(loader.get())
