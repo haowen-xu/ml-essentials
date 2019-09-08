@@ -98,6 +98,19 @@ class ConfigField(object):
         self._ignore_empty_env = ignore_empty_env
         self._validator_fn = validator_fn
 
+    def set_type(self, type_) -> 'ConfigField':
+        """Construct a new :class:`ConfigField` with new `type`."""
+        return ConfigField(
+            type=type_,
+            default=self.default_value,
+            description=self.description,
+            nullable=self.nullable,
+            choices=self.choices,
+            envvar=self.envvar,
+            ignore_empty_env=self.ignore_empty_env,
+            validator_fn=self.validator_fn
+        )
+
     def __repr__(self):
         attributes = []
         if self.type is not None:
@@ -1389,6 +1402,8 @@ def get_validator(type_or_value,
     elif isinstance(type_, type) and issubclass(type_, Config):
         return ConfigValidator(type_)
     elif isinstance(type_, type) and isinstance(value, ConfigField):
+        if additional_type is not None:
+            value = value.set_type(additional_type)
         return FieldValidator(value)
     else:
         return None

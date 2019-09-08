@@ -118,6 +118,26 @@ class ConfigTestCase(unittest.TestCase):
         validator = get_validator(field)
         self.assertListEqual(validator.validate([1, '2']), ['1', '2'])
 
+    def test_ConfigField_with_annotation(self):
+        # test no default value
+        class MyConfig(Config):
+            value: int = ConfigField()
+
+        c = MyConfig()
+        c.value = '456'
+        self.assertEqual(c.value, '456')
+
+        c.validate()
+        self.assertEqual(c.value, 456)
+
+        # test with default value
+        class MyConfig(Config):
+            value: int = ConfigField(default='456')
+
+        c = MyConfig()
+        c.validate()
+        self.assertEqual(c.value, 456)
+
     def test_ConfigField_envvar(self):
         field = ConfigField(int, default=123, envvar='MY_FIELD')
         self.assertEqual(
@@ -158,7 +178,6 @@ class ConfigTestCase(unittest.TestCase):
                             ignore_empty_env=False)
         with set_environ_context(MY_FIELD=''):
             self.assertEqual(field.get_default_value(), '')
-
 
     def test_Config_envvar(self):
         class MyConfig(Config):
