@@ -788,8 +788,7 @@ class ConfigLoader(Generic[TConfig]):
         return self._config.validate(ignore_missing=ignore_missing,
                                      validate_all=self.validate_all)
 
-    def load_object(self, key_values: Union[dict, Config]
-                    ) -> 'ConfigLoader[TConfig]':
+    def load_object(self, key_values: Union[dict, Config]):
         """
         Load config attributes from the specified `key_values` object.
 
@@ -886,10 +885,8 @@ class ConfigLoader(Generic[TConfig]):
             return dst
 
         self._config.update(copy_values(key_values, Config(), prefix='.'))
-        return self
 
-    def load_json(self, path: Union[str, bytes, PathLike], cls=None
-                  ) -> 'ConfigLoader[TConfig]':
+    def load_json(self, path: Union[str, bytes, PathLike], cls=None):
         """
         Load config from a JSON file.
 
@@ -900,10 +897,9 @@ class ConfigLoader(Generic[TConfig]):
         with codecs.open(path, 'rb', 'utf-8') as f:
             obj = json.load(f, cls=cls)
             self.load_object(obj)
-        return self
 
     def load_yaml(self, path: Union[str, bytes, PathLike],
-                  Loader=yaml.SafeLoader) -> 'ConfigLoader[TConfig]':
+                  Loader=yaml.SafeLoader):
         """
         Load config from a YAML file.
 
@@ -915,10 +911,8 @@ class ConfigLoader(Generic[TConfig]):
             obj = yaml.load(f, Loader=Loader)
             if obj is not None:
                 self.load_object(obj)
-        return self
 
-    def load_file(self, path: Union[str, bytes, PathLike]
-                  ) -> 'ConfigLoader[TConfig]':
+    def load_file(self, path: Union[str, bytes, PathLike]):
         """
         Load config from a file.
 
@@ -938,7 +932,6 @@ class ConfigLoader(Generic[TConfig]):
             self.load_json(path)
         else:
             raise IOError(f'Unsupported config file extension: {ext}')
-        return self
 
     def build_arg_parser(self, parser: Optional[ArgumentParser] = None
                          ) -> ArgumentParser:
@@ -1047,7 +1040,7 @@ class ConfigLoader(Generic[TConfig]):
 
         return parser
 
-    def parse_args(self, args: Iterable[str]) -> 'ConfigLoader[TConfig]':
+    def parse_args(self, args: Iterable[str]):
         """
         Parse config attributes from CLI argument.
 
@@ -1075,7 +1068,6 @@ class ConfigLoader(Generic[TConfig]):
         parsed = {key: value for key, value in vars(namespace).items()
                   if value is not NOT_SET}
         self.load_object(parsed)
-        return self
 
 
 TValue = TypeVar('TValue')
