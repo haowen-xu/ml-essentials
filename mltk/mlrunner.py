@@ -28,7 +28,7 @@ from .config import Config, ConfigLoader, deep_copy, format_key_values
 from .events import EventHost, Event
 from .mlstorage import (DocumentType, MLStorageClient, IdType,
                         normalize_relpath)
-from .utils import exec_proc, json_loads
+from .utils import exec_proc, json_loads, parse_tags
 
 __all__ = ['MLRunnerConfig', 'MLRunner']
 
@@ -775,6 +775,14 @@ def mlrun(config_file, name, description, tags, env, gpu, work_dir, server,
         lambda path: getLogger(__name__).info(
             'Load runner configuration from: %s', path)
     )
+
+    # parse the comma separated tags
+    old_tags = tags or ()
+    tags = []
+    for tag in old_tags:
+        for t in parse_tags(tag):
+            if t not in tags:
+                tags.append(t)
 
     # parse the CLI arguments
     if env:

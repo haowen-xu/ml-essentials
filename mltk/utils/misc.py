@@ -12,6 +12,7 @@ __all__ = [
     'optional_apply',  'validate_enum_arg',
     'maybe_close', 'iter_files',
     'InheritanceDict', 'CachedInheritanceDict',
+    'parse_tags',
 ]
 
 NOT_SET = ...
@@ -420,3 +421,53 @@ class CachedInheritanceDict(InheritanceDict[TValue]):
     def __setitem__(self, type_: type, value: TValue):
         self._cache.clear()
         super().__setitem__(type_, value)
+
+
+def parse_tags(s: str) -> List[str]:
+    """
+    Parse comma separated tags str into list of tags.
+
+    >>> parse_tags('one tag')
+    ['one tag']
+    >>> parse_tags('  strip left and right ends  ')
+    ['strip left and right ends']
+    >>> parse_tags('two, tags')
+    ['two', 'tags']
+    >>> parse_tags('"quoted, string" is one tag')
+    ['quoted, string is one tag']
+    >>> parse_tags(', empty tags,  , will be skipped, ')
+    ['empty tags', 'will be skipped']
+
+    Args:
+        s: The comma separated tags str.
+
+    Returns:
+        The parsed tags.
+    """
+    tags = []
+    buf = []
+    in_quoted = None
+
+    for c in s:
+        if in_quoted:
+            if c == in_quoted:
+                in_quoted = None
+            else:
+                buf.append(c)
+        elif c == '"' or c == '\'':
+            in_quoted = c
+        elif c == ',':
+            if buf:
+                tag = ''.join(buf).strip()
+                if tag:
+                    tags.append(tag)
+                buf.clear()
+        else:
+            buf.append(c)
+
+    if buf:
+        tag = ''.join(buf).strip()
+        if tag:
+            tags.append(tag)
+
+    return tags
