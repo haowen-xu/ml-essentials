@@ -28,6 +28,7 @@ from .config import Config, ConfigLoader, deep_copy, format_key_values
 from .events import EventHost, Event
 from .mlstorage import (DocumentType, MLStorageClient, IdType,
                         normalize_relpath)
+from .output_parser import *
 from .utils import exec_proc, json_loads, parse_tags
 
 __all__ = ['MLRunnerConfig', 'MLRunner']
@@ -289,71 +290,56 @@ class MLRunner(object):
                     count += f_count
             return size, count
 
-    def _on_mltk_log(self, progress, metrics):
+    def _on_mltk_log(self, status: ProgramProgress):
         updates = {}
 
-        if metrics:
-            def format_value(v):
-                if v[1] is not None:
-                    return f'{v[0]} (±{v[1]})'
-                else:
-                    return v[0]
-
-            metrics = {k: format_value(v) for k, v in metrics.items()
-                       if k.rsplit('_', 1)[-1] != 'time'}
-
+        # assemble the metrics
+        if status.metrics:
+            metrics = {
+                k: (f'{v.mean} (±{v.std})' if v.std is not None else v.mean)
+                for k, v in status.metrics.items()
+                if k.rsplit('_', 1)[-1] != 'time'
+            }
             if metrics:
                 updates['result'] = metrics
 
+        # assemble the progress
+        progress = {}
+        for name in ('epoch', 'step'):
+            v = getattr(status, name)
+            max_v = getattr(status, f'max_{name}')
+            if v is not None:
+                if max_v is not None:
+                    progress[name] = f'{v}/{max_v}'
+                else:
+                    progress[name] = v
+        if status.eta:
+            progress['eta'] = status.eta
+
         if progress:
-            def set_counter(name, v, max_v):
-                if v is not None:
-                    if max_v is not None:
-                        tmp[name] = f'{v}/{max_v}'
-                    else:
-                        tmp[name] = v
-
-            tmp = {}
-            set_counter('epoch', progress.get('epoch'),
-                        progress.get('max_epoch'))
-            set_counter('step', progress.get('step'),
-                        progress.get('max_step'))
-            if progress.get('eta'):
-                tmp['eta'] = progress['eta']
-
-            if tmp:
-                updates['progress'] = tmp
+            updates['progress'] = progress
 
         if updates:
             self.doc.update(updates)
 
-    def _on_webui_log(self, info):
-        if info:
-            def get_hostname_cached():
-                if _cache[0] is None:
-                    _cache[0] = socket.gethostname()
-                return _cache[0]
-            _cache = [None]  # type: List[str]
-
-            webui = {}
-            for key, val in info.items():
-                webui[key] = val
-                try:
-                    u = urlsplit(val)
-                except Exception as ex:  # pragma: no cover
-                    pass
-                else:
-                    if u.scheme in ('http', 'https'):
-                        parts = u.netloc.rsplit(':', 1)
-                        if parts[0] in ('0.0.0.0', '[::0]'):
-                            parts[0] = get_hostname_cached()
-                            u = SplitResult(
-                                scheme=u.scheme, netloc=':'.join(parts),
-                                path=u.path, query=u.query, fragment=u.fragment
-                            )
-                            webui[key] = urlunsplit(u)
-
-            self.doc.update({'webui': webui})
+    def _on_webui_log(self, status: ProgramWebUI):
+        name = status.name
+        uri = status.uri
+        try:
+            u = urlsplit(uri)
+        except Exception as ex:  # pragma: no cover
+            pass
+        else:
+            if u.scheme in ('http', 'https'):
+                parts = u.netloc.rsplit(':', 1)
+                if parts[0] in ('0.0.0.0', '[::0]'):
+                    parts[0] = socket.gethostname()
+                    u = SplitResult(
+                        scheme=u.scheme, netloc=':'.join(parts),
+                        path=u.path, query=u.query, fragment=u.fragment
+                    )
+                    uri = urlunsplit(u)
+        self.doc.update({'webui': {name: uri}})
 
     def _create_log_parser(self):
         stdout_pattern = self.config.integration.stdout_pattern
@@ -987,25 +973,25 @@ class StdoutParser(object):
 
     Various outputs can be parsed and the corresponding events can be triggered:
 
-    >>> parser.parse_line('[Epoch 1/10, Step 5, ETA 2h 10s] '
-    ...                   'epoch time: 3.2s; step time: 0.1s (±0.02s)'.
-    ...                   encode('utf-8'))
-    {'epoch': 1, 'max_epoch': 10, 'step': 5, 'eta': '2h 10s'} {'epoch_time': ('3.2s', None), 'step_time': ('0.1s', '0.02s')}
+    >>> parser.parse('[Epoch 1/10, Step 5, ETA 2h 10s] '
+    ...              'epoch time: 3.2s; step time: 0.1s (±0.02s)\\n'.
+    ...              encode('utf-8'))
+    ProgramProgress(epoch=1, max_epoch=10, step=5, max_step=None, eta='2h 10s', metrics={'epoch_time': ProgramMetric(mean='3.2s', std=None), 'step_time': ProgramMetric(mean='0.1s', std='0.02s')})
 
-    >>> parser.parse_line(b'TensorBoard 1.13.1 at http://127.0.0.1:62462 '
-    ...                   b'(Press CTRL+C to quit)')
-    {'TensorBoard': 'http://127.0.0.1:62462'}
-    >>> parser.parse_line(b'Serving HTTP on 0.0.0.0 port 8000 '
-    ...                   b'(http://0.0.0.0:8000/) ...')
-    {'SimpleHTTP': 'http://0.0.0.0:8000/'}
+    >>> parser.parse(b'TensorBoard 1.13.1 at http://127.0.0.1:62462 '
+    ...              b'(Press CTRL+C to quit)\\n')
+    ProgramWebUI(name='TensorBoard', uri='http://127.0.0.1:62462')
+    >>> parser.parse(b'Serving HTTP on 0.0.0.0 port 8000 '
+    ...              b'(http://0.0.0.0:8000/) ...\\n')
+    ProgramWebUI(name='SimpleHTTP', uri='http://0.0.0.0:8000/')
 
-    >>> parser.parse_line(b'no pattern exist')
+    >>> parser.parse(b'no pattern exist\\n')
 
     Too long output lines will not be parsed, for example:
 
-    >>> parser.parse_line(b'[Epoch 1/10, Step 5] ')
-    {'epoch': 1, 'max_epoch': 10, 'step': 5} {}
-    >>> parser.parse_line(b'[Epoch 1/10, Step 5]' + b' ' * 2048)
+    >>> parser.parse(b'[Epoch 1/10, Step 5] \\n')
+    ProgramProgress(epoch=1, max_epoch=10, step=5, max_step=None, eta=None, metrics={})
+    >>> parser.parse(b'[Epoch 1/10, Step 5]' + b' ' * 2048 + b'\\n')
     """
 
     def __init__(self,
@@ -1020,49 +1006,20 @@ class StdoutParser(object):
             mltk_pattern: The regex pattern for the overall MLTK logs.
             mltk_metric_pattern: The regex pattern for the metrics in MLTK logs.
         """
-        self._max_parse_length = max_parse_length
         self._events = EventHost()
         self._on_mltk_log = self.events['on_mltk_log']
         self._on_webui_log = self.events['on_webui_log']
 
-        # buffer for accumulating lines
-        self._line_buffer = None
-
-        # patterns for parsing tfsnippet & mltk logs
-        if mltk_pattern is None:
-            mltk_pattern = (
-                rb'^\['
-                rb'(?:Epoch (?P<epoch>\d+)(?:/(?P<max_epoch>\d+))?)?[, ]*'
-                rb'(?:Step (?P<step>\d+)(?:/(?P<max_step>\d+))?)?[, ]*'
-                rb'(?:ETA (?P<eta>[0-9\.e+ dhms]+))?'
-                rb'\]\s*'
-                rb'(?P<metrics>.*?)\s*(?:\(\*\))?\s*'
-                rb'$'
-            )
-        else:
-            mltk_pattern = str(mltk_pattern).encode('utf-8')
-
-        if mltk_metric_pattern is None:
-            mltk_metric_pattern = (
-                rb'^\s*(?P<name>[^:]+): (?P<mean>[^()]+)'
-                rb'(?: \(\xc2\xb1(?P<std>[^()]+)\))?\s*$'
-            )
-        else:
-            mltk_metric_pattern = str(mltk_metric_pattern).encode('utf-8')
-
-        self._mltk_pattern = re.compile(mltk_pattern)
-        self._mltk_metric_pattern = re.compile(mltk_metric_pattern)
-
-        # pattern for parsing tensorboard log
-        self._webui_pattern = re.compile(
-            rb'(?:^TensorBoard \S+ at (?P<TensorBoard>\S+))|'
-            rb'(?:^Serving HTTP on \S+ port \d+ \((?P<SimpleHTTP>[^()]+)\))'
+        self._output_sink = ProgramOutputSink(
+            parsers=[
+                ProgramProgressParser(
+                    line_pattern=mltk_pattern,
+                    metric_pattern=mltk_metric_pattern,
+                ),
+                ProgramWebUIParser(),
+            ],
+            max_parse_length=max_parse_length,
         )
-
-    @property
-    def max_parse_length(self):
-        """Get the maximum length of line to parse."""
-        return self._max_parse_length
 
     @property
     def events(self) -> EventHost:
@@ -1088,67 +1045,11 @@ class StdoutParser(object):
         """
         return self._on_webui_log
 
-    def parse_line(self, line: bytes):
-        """
-        Parse an Stdout line.
-
-        Args:
-            line: The line content.
-        """
-        # check the length limit
-        if len(line) > self.max_parse_length:
-            return
-
-        # try parse as MLTK log
-        m = self._mltk_pattern.match(line)
-        if m:
-            g = m.groupdict()
-
-            # the progress
-            progress = {}
-            for key in ('epoch', 'max_epoch', 'step', 'max_step'):
-                if g.get(key, None) is not None:
-                    progress[key] = int(g[key])
-            if g.get('eta', None) is not None:
-                progress['eta'] = g['eta'].decode('utf-8').strip()
-
-            # the metrics
-            metrics = {}
-            metric_pieces = g.pop('metrics', None)
-
-            if metric_pieces:
-                metric_pieces = metric_pieces.split(b';')
-                for metric in metric_pieces:
-                    m = self._mltk_metric_pattern.match(metric)
-                    if m:
-                        g = m.groupdict()
-                        name = g['name'].decode('utf-8').strip()
-                        mean = g['mean'].decode('utf-8').strip()
-                        if g.get('std', None) is not None:
-                            std = g['std'].decode('utf-8').strip()
-                        else:
-                            std = None
-
-                        # special hack: tfsnippet replaced "_" by " ",
-                        # but we now do not use this replacement.
-                        name = name.replace(' ', '_')
-                        metrics[name] = (mean, std)
-
-            # filter out none items
-            metrics = {k: v for k, v in metrics.items() if v is not None}
-
-            # now trigger the event
-            self.on_mltk_log.fire(progress, metrics)
-            return
-
-        # try parse as TensorBoard logs
-        m = self._webui_pattern.match(line)
-        if m:
-            g = m.groupdict()
-            for key, val in g.items():
-                if val is not None:
-                    self.on_webui_log.fire({key: val.decode('utf-8')})
-            return
+    def _dispatch_status(self, status: ProgramStatus):
+        if isinstance(status, ProgramProgress):
+            self.on_mltk_log.fire(status)
+        elif isinstance(status, ProgramWebUI):
+            self.on_webui_log.fire(status)
 
     def parse(self, content: bytes):
         """
@@ -1157,38 +1058,15 @@ class StdoutParser(object):
         Args:
             content: The output content.
         """
-        # find the first line break
-        start = 0
-        end = content.find(b'\n')
-        if end != -1:
-            if self._line_buffer:
-                self.parse_line(self._line_buffer + content[: end])
-                self._line_buffer = None
-            else:
-                self.parse_line(content[: end])
-            start = end + 1
-
-            while start < len(content):
-                end = content.find(b'\n', start)
-                if end != -1:
-                    self.parse_line(content[start: end])
-                    start = end + 1
-                else:
-                    break
-
-        if start < len(content):
-            if self._line_buffer:
-                self._line_buffer = self._line_buffer + content[start:]
-            else:
-                self._line_buffer = content[start:]
+        for s in self._output_sink.parse(content):
+            self._dispatch_status(s)
 
     def flush(self):
         """
         Parse the un-parsed content as a complete line.
         """
-        if self._line_buffer:
-            self.parse_line(self._line_buffer)
-            self._line_buffer = None
+        for s in self._output_sink.flush():
+            self._dispatch_status(s)
 
 
 class ProgramHost(object):

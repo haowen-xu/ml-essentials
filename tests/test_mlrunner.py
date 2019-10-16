@@ -855,47 +855,6 @@ class MLRunTestCase(unittest.TestCase):
             self.assertEqual(result.exit_code, -1)
 
 
-class StdoutParserTestCase(unittest.TestCase):
-
-    def test_parse(self):
-        class MyParser(StdoutParser):
-            def parse_line(self, line: bytes):
-                logs.append(line)
-
-        logs = []
-        parser = MyParser()
-
-        parser.parse(b'')
-        parser.parse(b'no line break ')
-        parser.parse(b'until ')
-        parser.parse(b'')
-        parser.parse(b'this word\nanother line\nthen the third ')
-        parser.parse(b'line')
-
-        self.assertListEqual(logs, [
-            b'no line break until this word',
-            b'another line',
-        ])
-        parser.flush()
-        self.assertListEqual(logs, [
-            b'no line break until this word',
-            b'another line',
-            b'then the third line',
-        ])
-
-        parser.parse(b'')
-        parser.parse(b'the fourth line\n')
-        parser.parse(b'the fifth line\n')
-        parser.flush()
-        self.assertListEqual(logs, [
-            b'no line break until this word',
-            b'another line',
-            b'then the third line',
-            b'the fourth line',
-            b'the fifth line',
-        ])
-
-
 class ProgramHostTestCase(unittest.TestCase):
 
     @slow_test
