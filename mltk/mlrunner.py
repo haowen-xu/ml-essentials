@@ -79,6 +79,7 @@ class MLRunnerConfig(Config):
     gpu: List[int] = None
 
     quiet: bool = False
+    ctrl_c_timeout: int = 3
 
     class source(Config):
         src_dir: str = '.'
@@ -451,7 +452,8 @@ class MLRunner(object):
 
         # initialize the control server
         control_server = ControlServer()
-        control_server.on_kill.do(main_host.kill)
+        control_server.on_kill.do(
+            lambda: main_host.kill(self.config.ctrl_c_timeout))
 
         # now execute the processes
         @contextmanager
@@ -697,10 +699,13 @@ class MLRunner(object):
 @click.option('-c', 'command', required=False, default=None,
               help='Specify the shell command to execute. '
                    'Will override the program arguments (args).')
+@click.option('--ctrl-c-timeout', type=int, required=False, default=None,
+              help='Specify the timeout seconds of CTRL+C signal.')
 @click.argument('args', nargs=-1)
 def mlrun(config_file, name, description, tags, env, gpu, work_dir, server,
           resume_from, clone_from, copy_source, source_archive, parse_stdout,
-          print_config, daemon, tensorboard, command, args):
+          print_config, daemon, tensorboard, command, ctrl_c_timeout,
+          args):
     """
     Run an experiment.
 
@@ -824,6 +829,7 @@ def mlrun(config_file, name, description, tags, env, gpu, work_dir, server,
         'integration.parse_stdout': parse_stdout,
         'daemon': daemon or None,
         'args': command or args,
+        'ctrl_c_timeout': ctrl_c_timeout,
     }
 
     # special fix for empty envvar "MLSTORAGE_SERVER_URI"
