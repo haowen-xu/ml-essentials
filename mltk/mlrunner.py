@@ -394,6 +394,7 @@ class MLRunner(object):
             log_parser=self._create_log_parser(),
             log_file=log_file,
             append_to_file=True,
+            ctrl_c_timeout=self.config.ctrl_c_timeout,
         )
 
         # create the program hosts for the daemon processes
@@ -438,8 +439,7 @@ class MLRunner(object):
 
         # initialize the control server
         control_server = ControlServer()
-        control_server.on_kill.do(
-            lambda: main_host.kill(self.config.ctrl_c_timeout))
+        control_server.on_kill.do(main_host.kill)
 
         # now execute the processes
         @contextmanager
@@ -1081,7 +1081,8 @@ class ProgramHost(object):
                  log_to_stdout: bool = True,
                  log_parser: Optional[StdoutParser] = None,
                  log_file: Optional[Union[str, int]] = None,
-                 append_to_file: bool = True):
+                 append_to_file: bool = True,
+                 ctrl_c_timeout: int = 3):
         """
         Construct a new :class:`ProgramHost`.
 
@@ -1105,6 +1106,7 @@ class ProgramHost(object):
         self._log_parser = log_parser
         self._log_file = log_file
         self._append_to_file = append_to_file
+        self._ctrl_c_timeout = ctrl_c_timeout
         self._proc = None  # type: subprocess.Popen
 
     @property
@@ -1112,7 +1114,7 @@ class ProgramHost(object):
         """Get the managed process object."""
         return self._proc
 
-    def kill(self, ctrl_c_timeout: float = 3):
+    def kill(self, ctrl_c_timeout: Optional[float] = None):
         """
         Kill the process if it is running.
 
@@ -1120,6 +1122,8 @@ class ProgramHost(object):
         If the process does not exit in `ctrl_c_timeout` seconds, then
         it will kill the process by SIGKILL (or terminate on windows).
         """
+        if ctrl_c_timeout is None:
+            ctrl_c_timeout = self._ctrl_c_timeout
         if self.proc is not None and self.proc.poll() is None:
             try:
                 self.proc.kill(ctrl_c_timeout=ctrl_c_timeout)
@@ -1194,7 +1198,8 @@ class ProgramHost(object):
                            on_stdout=on_output,
                            stderr_to_stdout=True,
                            env=env,
-                           cwd=self._work_dir) as proc:
+                           cwd=self._work_dir,
+                           ctrl_c_timeout=self._ctrl_c_timeout) as proc:
                 self._proc = proc
                 yield proc
         finally:
