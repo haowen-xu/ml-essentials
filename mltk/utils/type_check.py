@@ -8,7 +8,6 @@ from enum import Enum
 from typing import *
 
 import numpy as np
-import typing
 import yaml
 
 from .misc import NOT_SET, Singleton, deep_copy
@@ -194,6 +193,12 @@ class TypeInfo(Generic[TObject]):
         return f'<TypeInfo({self})>'
 
 
+generic_alias_types = (type(Tuple[int]), type(Tuple[int, ...]),
+                       type(List[int]), type(Dict[str, int]),
+                       type(Union[int, float]),)
+is_subclass_safe = lambda t, base: isinstance(t, type) and issubclass(t, base)
+
+
 def type_info(type_) -> 'TypeInfo':
     """
     Get the compiled type information for specified Python `type_`.
@@ -206,7 +211,9 @@ def type_info(type_) -> 'TypeInfo':
     """
     if type_ is None or type_ == type(None):
         return NoneTypeInfo()
-    elif isinstance(type_, type):
+
+    # try to match known types
+    if isinstance(type_, type):
         if issubclass(type_, Enum):
             return EnumTypeInfo(type_)
         elif issubclass(type_, bool):
@@ -239,26 +246,27 @@ def type_info(type_) -> 'TypeInfo':
         elif hasattr(type_, TYPE_INFO_MAGIC_FIELD):
             return getattr(type_, TYPE_INFO_MAGIC_FIELD)
 
-    elif isinstance(type_, typing._GenericAlias):
-        if isinstance(type_.__origin__, type):
-            # Tuple[T1, T2] or Tuple[T, ...]
-            if issubclass(type_.__origin__, tuple):
-                if len(type_.__args__) == 2 and type_.__args__[1] is ...:
-                    return VardicTupleTypeInfo(type_info(type_.__args__[0]))
-                else:
-                    return TupleTypeInfo([
-                        type_info(t) for t in type_.__args__])
+    # try to match generic types from typing module
+    if isinstance(type_, generic_alias_types):
+        # Tuple[T1, T2] or Tuple[T, ...]
+        if type_.__origin__ is Tuple or \
+                is_subclass_safe(type_.__origin__, tuple):
+            if len(type_.__args__) == 2 and type_.__args__[1] is ...:
+                return VardicTupleTypeInfo(type_info(type_.__args__[0]))
+            else:
+                return TupleTypeInfo([
+                    type_info(t) for t in type_.__args__])
 
-            # List[T]
-            if issubclass(type_.__origin__, list):
-                if len(type_.__args__) == 1:
-                    return ListTypeInfo(type_info(type_.__args__[0]))
+        # List[T]
+        if type_.__origin__ is List or is_subclass_safe(type_.__origin__, list):
+            if len(type_.__args__) == 1:
+                return ListTypeInfo(type_info(type_.__args__[0]))
 
-            # Dict[T1, T2]
-            if issubclass(type_.__origin__, dict):
-                if len(type_.__args__) == 2:
-                    return DictTypeInfo(type_info(type_.__args__[0]),
-                                        type_info(type_.__args__[1]))
+        # Dict[T1, T2]
+        if type_.__origin__ is Dict or is_subclass_safe(type_.__origin__, dict):
+            if len(type_.__args__) == 2:
+                return DictTypeInfo(type_info(type_.__args__[0]),
+                                    type_info(type_.__args__[1]))
 
         elif type_.__origin__ is Union:
             # parse the union types
@@ -652,25 +660,25 @@ class UnionTypeInfo(MultiBaseTypeInfo):
     """
     Type information of ``Union[T1, T2, ..., Tn]``.
 
-    >>> t = type_info(Union[int, float, bool])
+    >>> t = type_info(Union[int, float, str])
     >>> t
-    <TypeInfo(Union[int, float, bool])>
+    <TypeInfo(Union[int, float, str])>
     >>> t.check_value(1)
     1
     >>> t.check_value(2.0)
     2.0
     >>> t.check_value(True)
     True
-    >>> t.check_value('off')
-    False
+    >>> t.check_value('hello')
+    'hello'
     >>> t.parse_string('1')
     1
     >>> t.parse_string('2.0')
     2.0
     >>> t.parse_string('2.5')
     2.5
-    >>> t.parse_string('false')
-    False
+    >>> t.parse_string('hello')
+    'hello'
     """
 
     _type_name = 'Union'

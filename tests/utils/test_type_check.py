@@ -239,11 +239,11 @@ class TypeInfoTestCase(unittest.TestCase):
 
         # Union[T1, T2, ..., Tn]
         assert_equal(
-            type_info(Union[int, float, bool]),
-            UnionTypeInfo([IntTypeInfo(), FloatTypeInfo(), BoolTypeInfo()]))
+            type_info(Union[int, float, str]),
+            UnionTypeInfo([IntTypeInfo(), FloatTypeInfo(), StrTypeInfo()]))
         assert_equal(
-            type_info(Union[int, int, float, bool, float]),
-            UnionTypeInfo([IntTypeInfo(), FloatTypeInfo(), BoolTypeInfo()]))
+            type_info(Union[int, int, float, str, float]),
+            UnionTypeInfo([IntTypeInfo(), FloatTypeInfo(), StrTypeInfo()]))
         assert_equal(
             type_info(Union[int, None]),
             OptionalTypeInfo(IntTypeInfo()))
@@ -253,11 +253,11 @@ class TypeInfoTestCase(unittest.TestCase):
         assert_equal(type_info(Union[None]), NoneTypeInfo())
         assert_equal(type_info(Union[None, None]), NoneTypeInfo())
         assert_not_equal(
-            type_info(Union[int, float, bool]),
-            TupleTypeInfo([IntTypeInfo(), FloatTypeInfo(), BoolTypeInfo()]))
+            type_info(Union[int, float, str]),
+            TupleTypeInfo([IntTypeInfo(), FloatTypeInfo(), StrTypeInfo()]))
         assert_not_equal(
-            type_info(Union[int, float, bool]),
-            UnionTypeInfo([IntTypeInfo(), FloatTypeInfo(), StrTypeInfo()]))
+            type_info(Union[int, float, str]),
+            UnionTypeInfo([IntTypeInfo(), FloatTypeInfo(), BoolTypeInfo()]))
 
         # Tuple[T1, T2, ..., Tn]
         assert_equal(
@@ -473,14 +473,12 @@ class TypeInfoTestCase(unittest.TestCase):
 
     def test_union(self):
         # simple test case
-        ti = type_info(Union[float, int, bool])
-        self.assertEqual(str(ti), 'Union[float, int, bool]')
+        ti = type_info(Union[float, int])
+        self.assertEqual(str(ti), 'Union[float, int]')
         self._check_cast(ti, 123.5, [123.5], ['123.5'], ['xxx'])
         self._check_cast(ti, 123, [123], ['123', '123.0'])
-        self._check_cast(ti, True, [True], ['true', 'on'])
         self.assertEqual(ti.parse_string('123'), 123)
         self.assertEqual(ti.parse_string('123.5'), 123.5)
-        self.assertEqual(ti.parse_string('FALSE'), False)
 
         # integrated test case: args
         ti = type_info(Union[List[Union[str, bytes]],
