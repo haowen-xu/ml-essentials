@@ -1,224 +1,301 @@
 import codecs
 import os
-import re
 import shutil
 import unittest
+from dataclasses import dataclass
 from tempfile import TemporaryDirectory
+from typing import *
 
 import pytest
 
-from mltk.config import (is_config_attribute, Config,
-                         ConfigField, BoolValidator, ValidationContext,
-                         ConfigValidator, StrValidator, FloatValidator,
-                         IntValidator, ConfigValidationError,
-                         get_validator, ConfigLoader, FieldValidator,
-                         CustomValidator, deep_copy, format_key_values)
-from tests.helpers import set_environ_context
+from mltk import *
+from mltk.utils import *
 
 
 class ConfigTestCase(unittest.TestCase):
 
-    def test_is_config_attribute(self):
-        class SubConfig(Config):
-            value = 1
-            _private = 2
-            field = ConfigField(str)
+    def test_fields(self):
+        int_factory = lambda: 12345
+
+        @dataclass
+        class MyDataClass(object):
+            val: int
+
+        class MyConfig(Config):
+            # field definitions
+            a: int
+            b: Optional[float]
+
+            c = 123.5
+            d = None
+            e: int = None
+            f = config_field(Union[int, float], default_factory=int_factory,
+                             description='f field', choices=[12345, 0],
+                             required=False)
+            g = config_field(int, nullable=True, choices=[123])
+            h = config_field(nullable=True)
+            i: int = config_field(float)
+            j = config_field(default_factory=int_factory)
+            k = config_field(Optional[float], nullable=True)
+            l = MyDataClass(val=99)
 
             class nested(Config):
-                value = 123
+                value: str = 'hello'
 
-            nested2 = Config(value=456)
+            # private field should not be included
+            _not_config_field: bool = True
 
-            def get_value(self):
-                return self.value
-
+            # property, staticmethod, classmethod and method should not
+            # be included
             @property
-            def the_value(self):
-                return self.value
+            def my_prop(self):
+                return 123
 
             @classmethod
-            def class_value(cls):
-                return cls.value
+            def class_method(cls):
+                pass
 
             @staticmethod
-            def static_value():
-                return SubConfig.value
+            def static_method():
+                pass
 
-        c = SubConfig()
-        c.value2 = 2
-        for key in ['value', 'field', 'nested', 'nested2']:
-            self.assertTrue(is_config_attribute(SubConfig, key))
+            def method(self):
+                pass
 
-        for key in ['value', 'value2', 'field', 'nested', 'nested2']:
-            self.assertTrue(is_config_attribute(c, key))
+            # other nested classes should not be included
+            class SomeOtherNestedClass(object):
+                the_value: str = 'should not include'
 
-        for key in ['value3', '_private', 'get_value', 'the_value',
-                    'class_value', 'static_value']:
-            self.assertFalse(is_config_attribute(SubConfig, key))
-            self.assertFalse(is_config_attribute(c, key))
+        ti = type_info(MyConfig)
+        expected_ti = ObjectTypeInfo(
+            MyConfig,
+            fields={
+                'a': ObjectFieldInfo('a', type_info(int)),
+                'b': ObjectFieldInfo('b', type_info(Optional[float]),
+                                     default=None),
+                'c': ObjectFieldInfo('c', type_info(float), default=123.5),
+                'd': ObjectFieldInfo(
+                    'd', type_info(Optional[Any]), default=None),
+                'e': ObjectFieldInfo('e', type_info(int), default=None),
+                'f': ObjectFieldInfo(
+                    'f', type_info(Union[int, float]),
+                    default_factory=int_factory, description='f field',
+                    choices=(12345, 0), required=False,
+                ),
+                'g': ObjectFieldInfo(
+                    'g', type_info(Optional[int]), choices=(123,),
+                    default=None,
+                ),
+                'h': ObjectFieldInfo(
+                    'h', type_info(Optional[Any]), default=None),
+                'i': ObjectFieldInfo('i', type_info(int)),
+                'j': ObjectFieldInfo('j', type_info(int),
+                                     default_factory=int_factory),
+                'k': ObjectFieldInfo('k', type_info(Optional[float]),
+                                     default=None),
+                'l': ObjectFieldInfo('l', type_info(MyDataClass),
+                                     default=MyDataClass(val=99)),
+                'nested': ObjectFieldInfo(
+                    'nested',
+                    ObjectTypeInfo(MyConfig.nested, fields={
+                        'value': ObjectFieldInfo(
+                            'value', type_info(str), default='hello')
+                    }),
+                    default_factory=MyConfig.nested
+                ),
+            }
+        )
 
-        for key in ['value3']:
-            self.assertTrue(is_config_attribute(
-                SubConfig, key, require_existence=False))
-            self.assertTrue(is_config_attribute(
-                c, key, require_existence=False))
+        self.assertIs(type_info(MyConfig), ti)  # singleton type info
+        self.assertEqual(ti, expected_ti)
 
-    def test_ConfigField(self):
-        # not specifying type and default
-        field = ConfigField()
-        self.assertEqual(repr(field), 'ConfigField(nullable=True)')
-
-        # specifying default value but not type
-        field = ConfigField(default=123)
-        self.assertIsNone(field.type)
-        self.assertEqual(
-            repr(field), 'ConfigField(default=123, nullable=True)')
-
-        # specifying type but not default value
+    def test_checkers(self):
         class MyConfig(Config):
-            a = 123
+            _a_min: int = 1
+            a: int
 
-        field = ConfigField(MyConfig)
-        self.assertIs(field.type, MyConfig)
-        self.assertEqual(
-            repr(field),
-            'ConfigField(type=ConfigTestCase.test_ConfigField.'
-            '<locals>.MyConfig, nullable=True)'
+            @field_checker('a')
+            def _a_post_checker(cls, v):
+                if v < 4 * cls._a_min:
+                    raise ValueError(f'_a_post: must >= {4 * cls._a_min}')
+                return v
+
+            @field_checker('*', 'a', pre=True)
+            def _any_pre_checker(cls, v):
+                if v < 2 * cls._a_min:
+                    raise ValueError(f'_any_pre: must >= {2 * cls._a_min}')
+                return v
+
+            @root_checker()
+            def _root_post_checker(cls, values):
+                if values.a < 3 * cls._a_min:
+                    raise ValueError(f'_root_post: must >= {3 * cls._a_min}')
+
+            @root_checker(pre=True)
+            def _root_pre_checker(cls, values):
+                if values['a'] < cls._a_min:
+                    raise ValueError(f'_root_pre: must >= {cls._a_min}')
+
+        # test type info
+        ti = type_info(MyConfig)
+        expected_ti = ObjectTypeInfo(
+            MyConfig,
+            fields={'a': ObjectFieldInfo('a', type_info(int))},
+            field_checkers=[
+                ObjectFieldChecker(['a'], MyConfig._a_post_checker, pre=False),
+                ObjectFieldChecker(['*'], MyConfig._any_pre_checker, pre=True),
+            ],
+            root_checkers=[
+                ObjectRootChecker(MyConfig._root_post_checker, pre=False),
+                ObjectRootChecker(MyConfig._root_pre_checker, pre=True),
+            ]
         )
+        self.assertEqual(ti, expected_ti)
 
-        # specifying the description
-        field = ConfigField(int, description='hello')
-        self.assertEqual(field.description, 'hello')
-        self.assertEqual(
-            repr(field), 'ConfigField(type=int, nullable=True)')
+        # test actual type checking
+        self.assertEqual(ti.check_value({'a': 100}), MyConfig(a=100))
+        with pytest.raises(TypeCheckError,
+                           match='_root_pre: must >= 1'):
+            _ = ti.check_value({'a': 0})
+        with pytest.raises(TypeCheckError,
+                           match='_any_pre: must >= 2'):
+            _ = ti.check_value({'a': 1})
+        with pytest.raises(TypeCheckError,
+                           match='_root_post: must >= 3'):
+            _ = ti.check_value({'a': 2})
+        with pytest.raises(TypeCheckError,
+                           match='_a_post: must >= 4'):
+            _ = ti.check_value({'a': 3})
 
-        # specifying nullable
-        field = ConfigField(nullable=False)
-        self.assertFalse(field.nullable)
-        self.assertEqual(repr(field), 'ConfigField(nullable=False)')
+        # test inherit checkers
+        class MyMixin:
+            _a_min: int = 2
 
-        # specifying the choices
-        field = ConfigField(int, choices=[1, 2, 3])
-        self.assertIsInstance(field.choices, tuple)
-        self.assertTupleEqual(field.choices, (1, 2, 3))
-        self.assertEqual(
-            repr(field),
-            'ConfigField(type=int, nullable=True, choices=[1, 2, 3])'
+        class MyChild(MyMixin, MyConfig):
+            pass
+
+        self.assertEqual(MyChild._a_min, 2)
+        ti = type_info(MyChild)
+        expected_ti = ObjectTypeInfo(
+            MyChild,
+            fields={'a': ObjectFieldInfo('a', type_info(int))},
+            field_checkers=[
+                ObjectFieldChecker(['a'], MyChild._a_post_checker, pre=False),
+                ObjectFieldChecker(['*'], MyChild._any_pre_checker, pre=True),
+            ],
+            root_checkers=[
+                ObjectRootChecker(MyChild._root_post_checker, pre=False),
+                ObjectRootChecker(MyChild._root_pre_checker, pre=True),
+            ]
         )
+        self.assertEqual(ti, expected_ti)
+        self.assertEqual(ti.check_value({'a': 100}), MyChild(a=100))
+        with pytest.raises(TypeCheckError,
+                           match='_root_pre: must >= 2'):
+            _ = ti.check_value({'a': 1})
+        with pytest.raises(TypeCheckError,
+                           match='_any_pre: must >= 4'):
+            _ = ti.check_value({'a': 3})
+        with pytest.raises(TypeCheckError,
+                           match='_root_post: must >= 6'):
+            _ = ti.check_value({'a': 5})
+        with pytest.raises(TypeCheckError,
+                           match='_a_post: must >= 8'):
+            _ = ti.check_value({'a': 7})
 
-        # specifying the custom validator
-        def str_list_validator(value):
-            return [str(s) for s in value]
+    def test_instance(self):
+        envvar = 'MLTK_TEST_C'
+        if envvar in os.environ:
+            os.environ.pop(envvar)
 
-        field = ConfigField(list, validator_fn=str_list_validator)
-        self.assertEqual(
-            repr(field),
-            'ConfigField(type=list, nullable=True, custom validator)'
-        )
-        validator = get_validator(field)
-        self.assertListEqual(validator.validate([1, '2']), ['1', '2'])
-
-    def test_ConfigField_with_annotation(self):
-        # test no default value
+        @config_params(undefined_fields=True)
         class MyConfig(Config):
-            value: int = ConfigField()
+            a: int
+            b: float = 123.5
+            c: str = config_field(required=False, envvar=envvar)
 
-        c = MyConfig()
-        c.value = '456'
-        self.assertEqual(c.value, '456')
+        # construct with empty value
+        cfg = MyConfig()
+        self.assertEqual(cfg, MyConfig(b=123.5))
+        self.assertNotEqual(cfg, MyConfig(b=123.0))
+        self.assertNotEqual(cfg, Config(b=123.5))
+        self.assertNotEqual(cfg, MyConfig(a=456, b=123.5))
 
-        c.validate()
-        self.assertEqual(c.value, 456)
+        self.assertEqual(repr(cfg), f'{MyConfig.__qualname__}(b=123.5)')
+        self.assertEqual(config_to_dict(cfg), {'b': 123.5})
+        self.assertEqual(len(cfg), 1)
+        self.assertEqual(list(cfg), ['b'])
+        self.assertEqual(cfg['b'], 123.5)
+        self.assertEqual(cfg, MyConfig(b=123.5))
 
-        # test with default value
+        # test setitem, getitem, and delitem
+        self.assertIn('b', cfg)
+        self.assertNotIn('a', cfg)
+        self.assertNotIn('c', cfg)
+
+        cfg['a'] = 456
+        self.assertEqual(cfg, MyConfig(a=456, b=123.5))
+        self.assertIn('a', cfg)
+        self.assertEqual(cfg['a'], 456)
+        self.assertEqual(repr(cfg), f'{MyConfig.__qualname__}(a=456, b=123.5)')
+        self.assertEqual(config_to_dict(cfg), {'a': 456, 'b': 123.5})
+        self.assertEqual(len(cfg), 2)
+        self.assertEqual(list(cfg), ['b', 'a'])
+
+        del cfg['b']
+        self.assertNotEqual(cfg, MyConfig(a=456, b=123.5))
+        self.assertNotEqual(cfg, MyConfig(b=123.5))
+        self.assertNotIn('b', cfg)
+        self.assertEqual(repr(cfg), f'{MyConfig.__qualname__}(a=456)')
+        self.assertEqual(config_to_dict(cfg), {'a': 456})
+
+        # test envvar
+        os.environ[envvar] = 'hello, world'
+        cfg = MyConfig()
+        self.assertEqual(cfg, MyConfig(b=123.5, c='hello, world'))
+
+    def test_to_dict(self):
+        @dataclass
+        class MyDataClass(object):
+            value: int = 3
+
         class MyConfig(Config):
-            value: int = ConfigField(default='456')
+            a: int = 1
 
-        c = MyConfig()
-        c.validate()
-        self.assertEqual(c.value, 456)
+            class nested(Config):
+                b: float = 2.0
+                data_object = MyDataClass()
 
-    def test_ConfigField_envvar(self):
-        field = ConfigField(int, default=123, envvar='MY_FIELD')
-        self.assertEqual(
-            repr(field),
-            'ConfigField(type=int, default=123, nullable=True, '
-            'envvar=\'MY_FIELD\')'
+        cfg = MyConfig()
+        self.assertDictEqual(
+            config_to_dict(cfg),
+            {'a': 1, 'nested': MyConfig.nested()}
         )
-        self.assertEqual(field.get_default_value(), 123)
-
-        # test validator okay
-        with set_environ_context(MY_FIELD='123'):
-            self.assertEqual(field.get_default_value(), 123)
-
-        # test validator error
-        with set_environ_context(MY_FIELD='xxx'):
-            with pytest.raises(ValueError,
-                               match=r"invalid literal for int\(\) with base "
-                                     r"10: 'xxx'"):
-                _ = field.get_default_value()
-
-        # test no validator
-        field = ConfigField(envvar='MY_FIELD')
-        self.assertEqual(
-            repr(field),
-            'ConfigField(nullable=True, envvar=\'MY_FIELD\')'
+        self.assertDictEqual(
+            config_to_dict(cfg, flatten=True),
+            {'a': 1, 'nested.b': 2.0, 'nested.data_object.value': 3}
         )
-        self.assertEqual(field.get_default_value(), ...)
 
-        with set_environ_context(MY_FIELD='hello'):
-            self.assertEqual(field.get_default_value(), 'hello')
-
-        # test dealing with empty envvar
-        field = ConfigField(envvar='MY_FIELD', default='123')
-        with set_environ_context(MY_FIELD=''):
-            self.assertEqual(field.get_default_value(), '123')
-
-        field = ConfigField(envvar='MY_FIELD', default='123',
-                            ignore_empty_env=False)
-        with set_environ_context(MY_FIELD=''):
-            self.assertEqual(field.get_default_value(), '')
-
-    def test_Config_envvar(self):
-        class MyConfig(Config):
-            value = ConfigField(int, default=1, envvar='MY_FIELD')
-
-        self.assertEqual(MyConfig().value, 1)
-
-        with set_environ_context(MY_FIELD='123'):
-            self.assertEqual(MyConfig().value, 123)
-
-    def test_Config_setattr(self):
-        config = Config()
         with pytest.raises(TypeError,
-                           match='`value` must not be a ConfigField'):
-            config.value = ConfigField(int)
+                           match='`o` is neither a Config nor a dataclass '
+                                 'object: 123'):
+            _ = config_to_dict(123)
 
-        with pytest.raises(AttributeError,
-                           match='`name` must not contain \'.\': \'a.b\''):
-            setattr(config, 'a.b', 123)
-
-    def test_Config_equality(self):
+    def test_config_defaults(self):
         class MyConfig(Config):
-            value = 123
+            a: int = 123
+            b: float
 
-        equal_samples = [
-            (Config(value=123), Config(value=123)),
-            (Config(value=Config(value=123)), Config(value=Config(value=123))),
-        ]
-        inequal_samples = [
-            (Config(value=123), Config(value=456)),
-            (Config(value=123), Config(value=456, value2=789)),
-            (Config(value=Config(value=123)), Config(value=Config(value=456))),
-            (Config(value=123), MyConfig()),
-        ]
-
-        for a, b in equal_samples:
-            self.assertEqual(a, b)
-            self.assertEqual(hash(a), hash(b))
-
-        for a, b in inequal_samples:
-            self.assertNotEqual(a, b)
+        expected_defaults = MyConfig(a=123)
+        self.assertEqual(config_defaults(MyConfig), expected_defaults)
+        self.assertEqual(
+            config_defaults(MyConfig(a=456, b=789.0)),
+            expected_defaults
+        )
+        with pytest.raises(TypeError,
+                           match='`config` is neither an instance of Config, '
+                                 'nor a subclass of Config: got 123'):
+            _ = config_defaults(123)
 
 
 class ConfigLoaderTestCase(unittest.TestCase):
@@ -229,10 +306,6 @@ class ConfigLoaderTestCase(unittest.TestCase):
 
         loader = ConfigLoader(MyConfig)
         self.assertIs(loader.config_cls, MyConfig)
-        self.assertFalse(loader.validate_all)
-
-        loader = ConfigLoader(MyConfig(), validate_all=True)
-        self.assertTrue(loader.validate_all)
 
         with pytest.raises(TypeError,
                            match='`config_or_cls` is neither a Config class, '
@@ -245,6 +318,7 @@ class ConfigLoaderTestCase(unittest.TestCase):
                 a = 123
                 b = ConfigField(float, default=None)
 
+            @config_params(undefined_fields=True)
             class nested2(Config):
                 c = 789
 
@@ -279,6 +353,7 @@ class ConfigLoaderTestCase(unittest.TestCase):
         class Nested2(Config):
             b = 456
 
+        @config_params(undefined_fields=True)
         class Nested3(Config):
             c = 789
 
@@ -356,13 +431,15 @@ class ConfigLoaderTestCase(unittest.TestCase):
     def test_parse_args(self):
         class MyConfig(Config):
             a = 123
-            b = ConfigField(float, default=None)
+            b: Optional[float] = None
 
             class nested(Config):
-                c = ConfigField(str, default=None, choices=['hello', 'bye'])
+                c = ConfigField(str, default=None, nullable=True,
+                                choices=['hello', 'bye'])
                 d = ConfigField(description='anything, but required')
 
             e = None
+            f = ConfigField(description='anything', required=False)
 
         # test help message
         loader = ConfigLoader(MyConfig)
@@ -370,11 +447,12 @@ class ConfigLoaderTestCase(unittest.TestCase):
         self.assertRegex(
             parser.format_help(),
             r"[^@]*"
-            r"--a\s+A\s+\(default 123\)\s+"
-            r"--b\s+B\s+\(default None\)\s+"
-            r"--e\s+E\s+\(default None\)\s+"
-            r"--nested\.c\s+NESTED\.C\s+\(default None; choices \['bye', 'hello'\]\)\s+"
-            r"--nested\.d\s+NESTED\.D\s+anything, but required\s+\(required\)\s+"
+            r"--a\s+int\s+\(default 123\)\s+"
+            r"--b\s+Optional\[float\]\s+\(default None\)\s+"
+            r"--e\s+Optional\[Any\]\s+\(default None\)\s+"
+            r"--f\s+Any\s+anything \(optional\)\s+"
+            r"--nested\.c\s+Optional\[str\]\s+\(default None; choices \['hello', 'bye'\]\)\s+"
+            r"--nested\.d\s+Any\s+anything, but required\s+\(required\)\s+"
         )
 
         # test parse
@@ -404,8 +482,19 @@ class ConfigLoaderTestCase(unittest.TestCase):
 
         # test parse error
         with pytest.raises(ValueError,
-                           match=r"at \.nested\.c: value is not one of: "
-                                 r"\['hello', 'bye'\]"):
+                           match=r"Invalid value for argument `--a`; at \.a: "
+                                 r"caused by:\n\* ValueError: invalid literal "
+                                 r"for int\(\) with base 10: 'xxx'"):
+            loader = ConfigLoader(MyConfig)
+            loader.parse_args([
+                '--a=xxx',
+                '--nested.d=True',
+            ])
+            _ = loader.get()
+
+        with pytest.raises(ValueError,
+                           match=r"at nested\.c: invalid value for field 'c'"
+                                 r": not one of \['hello', 'bye'\]"):
             loader = ConfigLoader(MyConfig)
             loader.parse_args([
                 '--nested.c=invalid',
@@ -414,8 +503,8 @@ class ConfigLoaderTestCase(unittest.TestCase):
             _ = loader.get()
 
         with pytest.raises(ValueError,
-                           match=r"at \.nested\.d: config attribute is "
-                                 r"required but not set"):
+                           match=r"at nested\.d: field 'd' is required, "
+                                 r"but its value is not specified"):
             loader = ConfigLoader(MyConfig)
             loader.parse_args([])
             _ = loader.get()
@@ -440,9 +529,9 @@ class ConfigLoaderTestCase(unittest.TestCase):
         self.assertRegex(
             parser.format_help(),
             r"[^@]*"
-            r"--nested1\.a\s+NESTED1\.A\s+\(default 123\)\s+"
-            r"--nested2\.b\s+NESTED2\.B\s+\(default 456\)\s+"
-            r"--nested3\.c\s+NESTED3\.C\s+\(default 789\)\s+"
+            r"--nested1\.a\s+int\s+\(default 123\)\s+"
+            r"--nested2\.b\s+int\s+\(default 456\)\s+"
+            r"--nested3\.c\s+int\s+\(default 789\)\s+"
         )
 
         # test parse
@@ -456,217 +545,3 @@ class ConfigLoaderTestCase(unittest.TestCase):
             MyConfig(nested1=MyConfig.nested1(a=1230), nested2=Nested2(b=4560),
                      nested3=Nested3(c=7890))
         )
-
-
-class DeepCopyTestCase(unittest.TestCase):
-
-    def test_deep_copy(self):
-        # test regex
-        pattern = re.compile(r'xyz')
-        self.assertIs(deep_copy(pattern), pattern)
-
-        # test list of regex
-        v = [pattern, pattern]
-        o = deep_copy(v)
-        self.assertIsNot(v, o)
-        self.assertEqual(v, o)
-        self.assertIs(v[0], o[0])
-        self.assertIs(o[1], o[0])
-
-
-class ValidatorTestCase(unittest.TestCase):
-
-    def test_ValidationContext(self):
-        context = ValidationContext()
-        context.get_path()
-        with context.enter('.a'):
-            assert (context.get_path() == '.a')
-            with context.enter('.b'):
-                assert (context.get_path() == '.a.b')
-            assert (context.get_path() == '.a')
-        assert (context.get_path() == '')
-
-    def test_get_validator(self):
-        # test validator on empty field
-        validator = get_validator(ConfigField())
-        self.assertIsInstance(validator, FieldValidator)
-        self.assertIsNone(validator.sub_validator)
-
-        # test nested config objects
-        class Nested2(Config): pass
-        class Nested3(Config): pass
-        class MyConfig(Config):
-            class nested1(Config): pass
-
-            nested2 = ConfigField(Nested2)
-            nested3 = Nested3()
-
-        validator = get_validator(MyConfig.nested1)
-        self.assertIsInstance(validator, ConfigValidator)
-        self.assertIs(validator.config_cls, MyConfig.nested1)
-
-        validator = get_validator(MyConfig.nested2)
-        self.assertIsInstance(validator, FieldValidator)
-        self.assertIsInstance(validator.sub_validator, ConfigValidator)
-        self.assertIs(validator.sub_validator.config_cls, Nested2)
-
-        validator = get_validator(MyConfig.nested3)
-        self.assertIsInstance(validator, ConfigValidator)
-        self.assertIs(validator.config_cls, Nested3)
-
-        validator = get_validator(MyConfig().nested1)
-        self.assertIsInstance(validator, ConfigValidator)
-        self.assertIs(validator.config_cls, MyConfig.nested1)
-
-        validator = get_validator(MyConfig().nested3)
-        self.assertIsInstance(validator, ConfigValidator)
-        self.assertIs(validator.config_cls, Nested3)
-
-        # test the additional type hint
-        validator = get_validator(None, int)
-        self.assertIsInstance(validator, IntValidator)
-
-    def test_CustomValidator(self):
-        v = CustomValidator(int)
-        self.assertEqual(repr(v), "CustomValidator(<class 'int'>)")
-        self.assertEqual(v.validate('123'), 123)
-
-    def test_IntValidator(self):
-        v = IntValidator()
-
-        self.assertEqual(v.validate(123), 123)
-        self.assertEqual(v.validate(123.), 123)
-        self.assertEqual(v.validate('123'), 123)
-
-        with pytest.raises(ConfigValidationError,
-                           match='casting a float number into integer is not '
-                                 'allowed'):
-            _ = v.validate(123.5)
-
-        with pytest.raises(ConfigValidationError,
-                           match='invalid literal for int'):
-            _ = v.validate('xxx')
-
-        with pytest.raises(ConfigValidationError,
-                           match='value is not an integer'):
-            _ = v.validate(123., ValidationContext(strict=True))
-
-    def test_FloatValidator(self):
-        v = FloatValidator()
-
-        self.assertEqual(v.validate(123), 123.)
-        self.assertEqual(v.validate(123.), 123.)
-        self.assertEqual(v.validate(123.5), 123.5)
-        self.assertEqual(v.validate('123.5'), 123.5)
-
-        with pytest.raises(ConfigValidationError,
-                           match='could not convert string to float'):
-            _ = v.validate('xxx')
-
-        with pytest.raises(ConfigValidationError,
-                           match='value is not a float number'):
-            _ = v.validate(123, ValidationContext(strict=True))
-
-    def test_BoolValidator(self):
-        v = BoolValidator()
-
-        self.assertEqual(v.validate(True), True)
-        self.assertEqual(v.validate('TRUE'), True)
-        self.assertEqual(v.validate('On'), True)
-        self.assertEqual(v.validate('yes'), True)
-        self.assertEqual(v.validate(1), True)
-
-        self.assertEqual(v.validate(False), False)
-        self.assertEqual(v.validate('false'), False)
-        self.assertEqual(v.validate('OFF'), False)
-        self.assertEqual(v.validate('No'), False)
-        self.assertEqual(v.validate(0), False)
-
-        with pytest.raises(ConfigValidationError,
-                           match='value cannot be casted into boolean'):
-            _ = v.validate('xxx')
-
-        with pytest.raises(ConfigValidationError,
-                           match='value is not a boolean'):
-            _ = v.validate(1, ValidationContext(strict=True))
-
-    def test_StrValidator(self):
-        v = StrValidator()
-
-        self.assertEqual(v.validate(''), '')
-        self.assertEqual(v.validate('text'), 'text')
-        self.assertEqual(v.validate(123), '123')
-        self.assertEqual(v.validate(True), 'True')
-        self.assertEqual(v.validate(None), 'None')
-
-        with pytest.raises(ConfigValidationError,
-                           match='value is not a string'):
-            _ = v.validate(1, ValidationContext(strict=True))
-
-    def test_ConfigValidator(self):
-        # check construction error
-        with pytest.raises(TypeError,
-                           match='`config_cls` is not Config class or a '
-                                 'sub-class of Config: <class \'str\'>'):
-            _ = ConfigValidator(str)
-
-        # check validation error
-        class MyConfig(Config):
-            a = 123
-
-        validator = ConfigValidator(MyConfig)
-        with pytest.raises(ConfigValidationError,
-                           match='value is not a ValidatorTestCase.'
-                                 'test_ConfigValidator.<locals>.MyConfig'):
-            validator.validate(Config(), ValidationContext(strict=True))
-
-        # check user validate
-        class MyConfig(Config):
-            class nested(Config):
-                value = 123
-
-                def user_validate(self):
-                    if self.value < 100:
-                        raise ValueError('`value` must >= 100')
-
-        validator = ConfigValidator(MyConfig)
-        with pytest.raises(ConfigValidationError,
-                           match='at .nested: `value` must >= 100'):
-            validator.validate(
-                Config(nested=Config(value=99)), ValidationContext())
-
-        # check annotation
-        class MyConfig(Config):
-            value: int
-
-        validator = ConfigValidator(MyConfig)
-        self.assertEqual(validator.validate(Config(value='123')),
-                         MyConfig(value=123))
-
-        # check validate_all = True
-        context = ValidationContext(validate_all=True)
-        self.assertEqual(validator.validate('hello', context),
-                         'hello')
-        with pytest.raises(ConfigValidationError,
-                           match='value cannot be casted into '
-                                 'ValidatorTestCase.test_ConfigValidator.'
-                                 '<locals>.MyConfig'):
-            context.throw()
-
-        context = ValidationContext(validate_all=True, strict=True)
-        c = Config()
-        self.assertIs(validator.validate(c, context), c)
-        with pytest.raises(ConfigValidationError,
-                           match='value is not a ValidatorTestCase.'
-                                 'test_ConfigValidator.<locals>.MyConfig'):
-            context.throw()
-
-
-class FormatKeyValuesTestCase(unittest.TestCase):
-
-    def test_format_key_values(self):
-        with pytest.raises(ValueError,
-                           match='`delimiter_char` must be one character: '
-                                 'got \'xx\''):
-            format_key_values({'a': 1}, delimiter_char='xx')
-

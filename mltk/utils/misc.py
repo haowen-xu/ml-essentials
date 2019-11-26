@@ -1,4 +1,6 @@
+import copy
 import os
+import re
 import time
 from contextlib import contextmanager
 from typing import *
@@ -7,15 +9,63 @@ import numpy as np
 from heapdict import heapdict
 
 __all__ = [
-    'NOT_SET',
+    'Singleton', 'NOT_SET',
     'format_duration', 'ETA', 'minibatch_slices_iterator',
     'optional_apply',  'validate_enum_arg',
     'maybe_close', 'iter_files',
     'InheritanceDict', 'CachedInheritanceDict',
-    'parse_tags',
+    'parse_tags', 'deep_copy',
 ]
 
-NOT_SET = ...
+
+class Singleton(object):
+    """
+    Base class for singleton classes.
+
+    >>> class Parent(Singleton):
+    ...     pass
+
+    >>> class Child(Parent):
+    ...     pass
+
+    >>> Parent() is Parent()
+    True
+    >>> Child() is Child()
+    True
+    >>> Parent() is not Child()
+    True
+    """
+
+    __instances_dict = {}
+
+    def __new__(cls, *args, **kwargs):
+        if cls not in Singleton.__instances_dict:
+            Singleton.__instances_dict[cls] = \
+                object.__new__(cls, *args, **kwargs)
+        return Singleton.__instances_dict[cls]
+
+
+class NotSet(Singleton):
+    """
+    Class of the `NOT_SET` constant.
+
+    >>> NOT_SET is not None
+    True
+    >>> NOT_SET
+    NOT_SET
+    >>> NOT_SET == NOT_SET
+    True
+    >>> NotSet() is NOT_SET
+    True
+    >>> NotSet() == NOT_SET
+    True
+    """
+
+    def __repr__(self):
+        return 'NOT_SET'
+
+
+NOT_SET = NotSet()
 
 
 def format_duration(seconds: Union[float, int],
@@ -471,3 +521,32 @@ def parse_tags(s: str) -> List[str]:
             tags.append(tag)
 
     return tags
+
+
+TValue = TypeVar('TValue')
+PatternType = type(re.compile('x'))
+
+
+def deep_copy(value: TValue) -> TValue:
+    """
+    A patched deep copy function, that can handle various types cannot be
+    handled by the standard :func:`copy.deepcopy`.
+
+    Args:
+        value: The value to be copied.
+
+    Returns:
+        The copied value.
+    """
+    def pattern_dispatcher(v, memo=None):
+        return v  # we don't need to copy a regex pattern object, it's read-only
+
+    old_dispatcher = copy._deepcopy_dispatch.get(PatternType, None)
+    copy._deepcopy_dispatch[PatternType] = pattern_dispatcher
+    try:
+        return copy.deepcopy(value)
+    finally:
+        if old_dispatcher is not None:  # pragma: no cover
+            copy._deepcopy_dispatch[PatternType] = old_dispatcher
+        else:
+            del copy._deepcopy_dispatch[PatternType]

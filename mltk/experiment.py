@@ -6,7 +6,7 @@ import zipfile
 from tempfile import TemporaryDirectory
 from typing import *
 
-from .config import Config, ConfigLoader
+from .config import Config, ConfigLoader, config_to_dict, config_defaults
 from .events import EventHost, Event
 from .mlstorage import MLStorageClient
 from .utils import NOT_SET, make_dir_archive, json_dumps, json_loads
@@ -256,8 +256,9 @@ class Experiment(Generic[TConfig]):
         Save the config values into `output_dir + "/config.json"`, and the
         default config values into `output_dir + "/config.defaults.json"`.
         """
-        config_json = json_dumps(self.config.to_flatten_dict())
-        default_config_json = json_dumps(self.config.defaults_flatten_dict())
+        config_json = json_dumps(config_to_dict(self.config, flatten=True))
+        default_config_json = json_dumps(
+            config_to_dict(config_defaults(self.config), flatten=True))
 
         with codecs.open(os.path.join(self.output_dir, 'config.json'),
                          'wb', 'utf-8') as f:

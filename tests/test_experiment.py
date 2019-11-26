@@ -13,6 +13,7 @@ from mltk.utils import json_loads
 from tests.helpers import set_environ_context, get_file_content, zip_snapshot
 
 
+@config_params(undefined_fields=True)
 class _YourConfig(Config):
     max_epoch = 100
     learning_rate = 0.5

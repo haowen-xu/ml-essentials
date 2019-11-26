@@ -17,7 +17,7 @@ from bson import ObjectId
 from click.testing import CliRunner
 from mock import Mock
 
-from mltk import Config, ConfigValidationError, MLStorageClient
+from mltk import ConfigValidationError, MLStorageClient, validate_config
 from mltk.mlrunner import (ProgramHost, StdoutParser, MLRunnerConfig,
                            SourceCopier, MLRunnerConfigLoader,
                            TemporaryFileCleaner, JsonFileWatcher, ExperimentDoc,
@@ -31,69 +31,66 @@ class MLRunnerConfigTestCase(unittest.TestCase):
     def test_validate(self):
         # test all empty
         config = MLRunnerConfig()
-        config.source.includes = None
-        config.source.excludes = None
+        config.source.includes = []
+        config.source.excludes = []
 
+        config.args = 'xyz'
         with pytest.raises(ConfigValidationError,
-                           match='`server` is required.'):
-            _ = config.validate()
+                           match='\'server\' is required.'):
+            _ = validate_config(config)
 
+        del config.args
         config.server = 'http://127.0.0.1:8080'
-
         with pytest.raises(ConfigValidationError,
-                           match='`args` is required.'):
-            _ = config.validate()
+                           match='\'args\' is required.'):
+            _ = validate_config(config)
 
         config.args = ''
         with pytest.raises(ConfigValidationError,
-                           match='`args` cannot be empty'):
-            _ = config.validate()
+                           match='\'args\' must not be empty'):
+            _ = validate_config(config)
 
         config.args = []
         with pytest.raises(ConfigValidationError,
-                           match='`args` cannot be empty'):
-            _ = config.validate()
+                           match='\'args\' must not be empty'):
+            _ = validate_config(config)
 
         config.args = ['sh', '-c', 'echo hello']
-        config = config.validate()
+        config = validate_config(config)
         for key in ('name', 'description', 'tags', 'env', 'gpu',
                     'work_dir', 'daemon'):
             self.assertIsNone(config[key])
-        self.assertIsNone(config.source.includes)
-        self.assertIsNone(config.source.excludes)
+        self.assertEqual(config.source.includes, [])
+        self.assertEqual(config.source.excludes, [])
 
         # test .args
         config = MLRunnerConfig(args=['sh', 123],
                                 server='http://127.0.0.1:8080')
-        self.assertEqual(config.validate().args, ['sh', '123'])
+        self.assertEqual(validate_config(config).args, ['sh', '123'])
         config = MLRunnerConfig(args='exit 0',
                                 server='http://127.0.0.1:8080')
-        self.assertEqual(config.validate().args, 'exit 0')
+        self.assertEqual(validate_config(config).args, 'exit 0')
 
         # test .tags
-        config.tags = 'hello'
-        self.assertListEqual(config.validate().tags, ['hello'])
         config.tags = ['hello', 123]
-        self.assertListEqual(config.validate().tags, ['hello', '123'])
+        self.assertListEqual(validate_config(config).tags, ['hello', '123'])
 
         # test .env
         config.env = {'value': 123}
-        self.assertEqual(config.validate().env, Config(value='123'))
+        self.assertEqual(validate_config(config).env, {'value': '123'})
 
         # test .gpu
-        config.gpu = 1
-        self.assertListEqual(config.validate().gpu, [1])
         config.gpu = [1, 2]
-        self.assertListEqual(config.validate().gpu, [1, 2])
+        self.assertListEqual(validate_config(config).gpu, [1, 2])
 
         # test .daemon
         config.daemon = 'exit 0'
         with pytest.raises(ConfigValidationError,
-                           match='`daemon` must be a sequence: got \'exit 0\''):
-            _ = config.validate()
+                           match='at daemon: value is not a sequence'):
+            _ = validate_config(config)
 
         config.daemon = ['exit 0', ['sh', '-c', 'exit 1']]
-        self.assertListEqual(config.validate().daemon, [
+        self.assertListEqual(validate_config(config).daemon, [
             'exit 0', ['sh', '-c', 'exit 1']
         ])
 
@@ -104,7 +101,7 @@ class MLRunnerConfigTestCase(unittest.TestCase):
         config.source.includes = includes
         config.source.excludes = excludes
 
-        c = config.validate()
+        c = validate_config(config)
         self.assertIsInstance(c.source.includes, list)
         self.assertEqual(len(c.source.includes), 1)
         self.assertEqual(c.source.includes[0].pattern, includes)
@@ -120,7 +117,7 @@ class MLRunnerConfigTestCase(unittest.TestCase):
         config.source.includes = includes
         config.source.excludes = excludes
 
-        c = config.validate()
+        c = validate_config(config)
         self.assertIsInstance(c.source.includes, list)
         self.assertEqual(len(c.source.includes), 2)
         self.assertEqual(c.source.includes[0].pattern, includes[0])
@@ -163,7 +160,7 @@ class MLRunnerConfigLoaderTestCase(unittest.TestCase):
                 'config1.yml': b'resume_from: zyx\n'
                                b'source.src_dir: config1',
                 'config2.yml': b'source.src_dir: config2\n'
-                               b'integration.log_file: config2.log',
+                               b'logging.log_file: config2.log',
             })
 
             # test loader
@@ -197,7 +194,7 @@ class MLRunnerConfigLoaderTestCase(unittest.TestCase):
             self.assertListEqual(load_order, expected_config_files)
 
             config = loader.get()
-            self.assertEqual(config.integration.log_file, 'config2.log')
+            self.assertEqual(config.logging.log_file, 'config2.log')
             self.assertEqual(config.source.src_dir, 'config2')
             self.assertEqual(config.resume_from, 'zyx')
             self.assertEqual(config.description, 'work/nested/.mlrun.yml')
@@ -206,7 +203,7 @@ class MLRunnerConfigLoaderTestCase(unittest.TestCase):
             self.assertEqual(config.name, 'work/.mlrun.yml')
             self.assertEqual(config.args, 'sys2/.mlrun.yml args')
             self.assertEqual(config.clone_from, 'sys1')
-            self.assertEqual(config.env, Config(a='1'))
+            self.assertEqual(config.env, {'a': '1'})
 
             # test bare loader
             loader = MLRunnerConfigLoader(system_paths=[])
@@ -394,7 +391,7 @@ class MLRunnerTestCase(unittest.TestCase):
                         '(http://0.0.0.0:12367/)"',
                         'env',
                     ],
-                    env=Config(MY_ENV='abc'),
+                    env={'MY_ENV': 'abc'},
                     gpu=[1, 2]
                 )
                 config.source.copy_to_dst = True
@@ -823,7 +820,7 @@ class MLRunTestCase(unittest.TestCase):
                 self.assertEqual(config, MLRunnerConfig(
                     server='http://127.0.0.1:8080',
                     args='echo hello',
-                    env=Config(MY_ENV='abc', MY_ENV2='def'),
+                    env={'MY_ENV': 'abc', 'MY_ENV2': 'def'},
                     gpu=[1, 2, 3],
                     name='test',
                     description='testing',

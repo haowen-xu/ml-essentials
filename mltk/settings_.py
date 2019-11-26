@@ -1,6 +1,6 @@
 import os
 
-from .config import Config, ConfigField
+from .config import Config, config_field
 
 __all__ = ['Settings', 'settings']
 
@@ -8,8 +8,7 @@ __all__ = ['Settings', 'settings']
 class Settings(Config):
     """Global settings of the whole `mltk` package."""
 
-    cache_root: str = ConfigField(
-        str,
+    cache_root: str = config_field(
         default=os.path.expanduser('~/.mltk/cache'),
         envvar='MLTK_CACHE_ROOT',
     )

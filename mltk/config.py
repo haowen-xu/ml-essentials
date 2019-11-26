@@ -1,741 +1,657 @@
 import codecs
-import copy
+import dataclasses
 import inspect
 import json
 import os
-import re
-from argparse import Action, ArgumentParser
-from collections import OrderedDict, namedtuple
-from contextlib import contextmanager
-from os import PathLike
+import warnings
+from argparse import ArgumentParser, Action
+from dataclasses import dataclass, is_dataclass
 from typing import *
 
-import numpy as np
 import yaml
-from terminaltables import AsciiTable
 
-from .utils import NOT_SET
+from .utils import *
 
 __all__ = [
-    'ConfigAttributeNotSetError', 'ConfigValidationError',
-    'ConfigField', 'Config', 'ConfigLoader', 'format_key_values',
+    'ConfigValidationError',
+    'field_checker', 'root_checker', 'config_field', 'ConfigField',
+    'config_params', 'get_config_params', 'ConfigMeta',
+    'Config', 'validate_config', 'config_to_dict', 'config_defaults',
+    'ConfigLoader',
 ]
 
-ValidatorFunctionType = Callable[[Any], Any]
+# general special attributes that is recognized by ``type_info``
+
+# special attributes of a Config class
+_FIELDS = '__mltk_config_fields__'  # fields
+_UNBOUND_CHECKERS = '__mltk_config_unbound_checkers__'  # unbound field and root checker params
+_PARAMS = '__mltk_config_params__'  # config parameters
+_PARAMS_CLASS_NAME = '__ConfigParams__'  # nested class as config parameters
+
+# special attributes of a Config classmethod
+_CHECKER_PARAMS = '__mltk_config_checker_params__'
+TConfig = TypeVar('TConfig')
 
 
-class ConfigAttributeNotSetError(ValueError):
-    """Indicate the value of a config attribute has not been set."""
-
-    def __init__(self, name: str):
-        super().__init__(name)
-
-    @property
-    def name(self) -> str:
-        """Get the name of the attribute."""
-        return self.args[0]
-
-    def __str__(self):
-        return f'config attribute not set: {self.name}'
+ConfigValidationError = TypeCheckError
+"""Legacy name for the :class:`TypeCheckError`."""
 
 
-ValidationErrorInfo = namedtuple('ValidationErrorInfo', ['path', 'message'])
+@dataclass
+class ObjectFieldCheckerParams(object):
+    fields: Tuple[str, ...]
+    method: classmethod
+    pre: bool
 
 
-class ConfigValidationError(ValueError):
-    """Indicate a validation error has occurred."""
-
-    def __init__(self, errors: List[ValidationErrorInfo]):
-        super().__init__(errors)
-
-    @property
-    def errors(self) -> List[ValidationErrorInfo]:
-        return self.args[0]
-
-    def __str__(self):
-        get_position = lambda e: f'at {e.path}: ' if e.path else ''
-        return '\n'.join(f'{get_position(e)}{e.message}' for e in self.errors)
+@dataclass
+class ObjectRootCheckerParams(object):
+    method: classmethod
+    pre: bool
 
 
-class ConfigField(object):
+ObjectCheckerParams = Union[ObjectFieldCheckerParams, ObjectRootCheckerParams]
+
+
+def field_checker(*fields, pre: bool = False):
     """
-    Represent a config attribute field.
-    """
+    Decorator to register a class method as a field checker in :class:`Config`.
 
-    def __init__(self,
-                 type: Optional[Type] = None,
+    The checker should be implemented as a class method, with `cls` as its
+    first argument, and the field value as its second argument.  Besides,
+    it may also accept `values` and `field` as keyword argument, with
+    `values` receiving all field values (being a dict if ``pre = True``,
+    or a `Config` instance if ``pre = False``), and `field` receiving the
+    name of the field being checked.
+
+    >>> class MyConfig(Config):
+    ...     a: int
+    ...     b: int
+    ...     c: int
+    ...
+    ...     @field_checker('c')
+    ...     def _checker(cls, v, values, field):
+    ...         if v != values['a'] + values['b']:
+    ...             raise ValueError('a + b != c')
+    ...         return v
+
+    >>> validate_config(MyConfig(a=1, b='2', c=3.0))
+    MyConfig(a=1, b=2, c=3)
+    >>> validate_config(MyConfig(a=1, b='2', c=4.0))
+    Traceback (most recent call last):
+       ...
+    mltk.utils.type_check.TypeCheckError: caused by:
+    * ValueError: a + b != c
+
+    Args:
+        *fields: The fields to be checked.  "*" represents all fields.
+        pre: Whether or not this checker should be run before the fields
+            having been checked against the field definitions?  If :obj:`True`,
+            `values` will be a dict, rather than an instance of `Config`.
+            Defaults to :obj:`False`.
+    """
+    def wrapper(method):
+        if not isinstance(method, classmethod):
+            method = classmethod(method)
+        if not hasattr(method, _CHECKER_PARAMS):
+            setattr(method, _CHECKER_PARAMS, [])
+        getattr(method, _CHECKER_PARAMS).append(
+            ObjectFieldCheckerParams(fields=fields, method=method, pre=pre))
+        return method
+    return wrapper
+
+
+def root_checker(pre: bool = False):
+    """
+    Decorator to register a class method as a root checker in :class:`Config`.
+
+    The checker should be implemented as a class method, with `cls` as its
+    first argument, and the object values as its second argument.
+    When ``pre = True``, the values will be a dict; otherwise it will be
+    an instance of `Config`.
+
+    >>> class MyConfig(Config):
+    ...     a: int
+    ...     b: int
+    ...     c: int
+    ...
+    ...     @root_checker()
+    ...     def _checker(cls, values):
+    ...         if values.c != values.a + values.b:
+    ...             raise ValueError('a + b != c')
+    ...         return values
+
+    >>> validate_config(MyConfig(a=1, b='2', c=3.0))
+    MyConfig(a=1, b=2, c=3)
+    >>> validate_config(MyConfig(a=1, b='2', c=4.0))
+    Traceback (most recent call last):
+       ...
+    mltk.utils.type_check.TypeCheckError: caused by:
+    * ValueError: a + b != c
+
+    Args:
+        pre: Whether or not this checker should be run before the fields
+            having been checked against the field definitions?  If :obj:`True`,
+            `values` will be a dict, rather than an instance of `Config`.
+            Defaults to :obj:`False`.
+    """
+    def wrapper(method):
+        if not isinstance(method, classmethod):
+            method = classmethod(method)
+        if not hasattr(method, _CHECKER_PARAMS):
+            setattr(method, _CHECKER_PARAMS, [])
+        getattr(method, _CHECKER_PARAMS).append(
+            ObjectRootCheckerParams(method=method, pre=pre))
+        return method
+    return wrapper
+
+
+def config_field(type: Optional[Type] = None,
                  default: Any = NOT_SET,
+                 default_factory: Callable[[], Any] = NOT_SET,
                  description: Optional[str] = None,
-                 nullable: bool = True,
-                 choices: Optional[Iterable] = None,
+                 choices: Optional[Sequence[Any]] = None,
+                 required: bool = True,
                  envvar: Optional[str] = None,
                  ignore_empty_env: bool = True,
-                 validator_fn: Optional[ValidatorFunctionType] = None):
-        """
-        Construct a new :class:`ConfigField`.
-
-        Args:
-            type: The value type.
-            default: The default config value.
-                :obj:`None` if not specified.
-            description: The config description.
-            nullable: Whether or not :obj:`None` is a valid value?
-            choices: Optional valid choices for the config value.
-            envvar: Key of the environment variable, used as the default
-                value for this config field.
-            ignore_empty_env: Whether or not to ignore empty values from
-                the environmental variable?
-            validator_fn: Custom validator function for input values.
-        """
-        nullable = bool(nullable)
-
-        self._type = type
-        self._default_value = default
-        self._description = description
-        self._nullable = nullable
-        self._choices = tuple(choices) if choices is not None else None
-        self._envvar = envvar
-        self._ignore_empty_env = ignore_empty_env
-        self._validator_fn = validator_fn
-
-    def set_type(self, type_) -> 'ConfigField':
-        """Construct a new :class:`ConfigField` with new `type`."""
-        return ConfigField(
-            type=type_,
-            default=self.default_value,
-            description=self.description,
-            nullable=self.nullable,
-            choices=self.choices,
-            envvar=self.envvar,
-            ignore_empty_env=self.ignore_empty_env,
-            validator_fn=self.validator_fn
-        )
-
-    def __repr__(self):
-        attributes = []
-        if self.type is not None:
-            attributes.append(f'type={self.type.__qualname__}')
-        if self.default_value is not NOT_SET:
-            attributes.append(f'default={self.default_value!r}')
-        attributes.append(f'nullable={self.nullable}')
-        if self.choices:
-            attributes.append(f'choices={list(self.choices)}')
-        if self.envvar:
-            attributes.append(f'envvar={self.envvar!r}')
-        if self.validator_fn is not None:
-            attributes.append(f'custom validator')
-
-        return f'ConfigField({", ".join(attributes)})'
-
-    @property
-    def type(self) -> Optional[Type]:
-        """Get the value type."""
-        return self._type
-
-    @property
-    def default_value(self):
-        """Get the default config value."""
-        return self._default_value
-
-    def get_default_value(self):
-        """
-        Get a copy of the default config value.
-
-        The default value will be copied instead of directly returned.
-
-        >>> list_value = [1, 2, 3]
-        >>> field = ConfigField(list, default=list_value)
-        >>> field.get_default_value() == list_value
-        True
-        >>> field.get_default_value() is list_value
-        False
-
-        If ``self.envvar`` is not None and ``os.environ[self.envvar]`` exists,
-        the value from the environment variable will be used instead of
-        the value of ``self.default_value``.
-        """
-        # try to get the value from env var
-        val = None
-
-        if self.envvar is not None and self.envvar in os.environ:
-            val = os.environ.get(self.envvar)
-            if not val and self.ignore_empty_env:
-                val = None
-
-        if val is not None:
-            return get_validator(self).validate(os.environ[self.envvar])
-
-        # otherwise return the default value configured in code
-        return deep_copy(self._default_value)
-
-    @property
-    def description(self) -> Optional[str]:
-        """Get the config description."""
-        return self._description
-
-    @property
-    def nullable(self) -> bool:
-        """Whether or not :obj:`None` is a valid value?"""
-        return self._nullable
-
-    @property
-    def choices(self) -> Optional[tuple]:
-        """Get the valid choices of the config value."""
-        return self._choices
-
-    @property
-    def envvar(self) -> Optional[str]:
-        """Get the key of the environment variable."""
-        return self._envvar
-
-    @property
-    def ignore_empty_env(self) -> bool:
-        """
-        Whether or not to ignore empty values from the environmental variable?
-        """
-        return self._ignore_empty_env
-
-    @property
-    def validator_fn(self) -> Optional[ValidatorFunctionType]:
-        """Get the custom validator function."""
-        return self._validator_fn
-
-
-class Config(object):
+                 # deprecated arguments
+                 nullable: bool = NOT_SET):
     """
-    Base class for config objects.
+    Define a :class:`Config` field.
 
-    Inherit from :class:`Config`, and define config values as public class
-    attributes:
+    Args:
+        type: Type of the field.  Any type literal that can be recognized
+            by :func:`mltk.utils.type_info`, e.g., ``Optional[int]``.
+            If the field type is already specified via type annotation,
+            then the type specified by this argument will be ignored.
+        default: The default value of this field.
+        default_factory: A function ``() -> Any``, which returns the
+            default value of this field.  `default` and `default_factory`
+            cannot be both specified.
+        description: Description of this field.
+        choices: Valid values for this field to take.
+        required: Whether or not this field is required?
+            If :obj:`False`, the object will pass type checking even
+            when this field is not specified a value.
+        envvar: The name of the environmental variable to read from.
+        ignore_empty_env: Whether or not empty string from the environmental
+            variable will be ignored, as if no value has been given?
+        nullable: DEPRECATED.  Whether or not this field is nullable?
+            Use ``Optional[T]`` as type instead of using this argument.
 
-    >>> class YourConfig(Config):
-    ...     max_epoch = 100
-    ...     max_step = ConfigField(int)
-    ...     activation = ConfigField(
-    ...         str, default='leaky_relu',
-    ...         choices=['sigmoid', 'relu', 'leaky_relu'])
-    ...     l2_regularization: float = None
-    ...     train = Config(batch_size=64)  # nested config object
-    ...
-    ...     class test(Config):  # nested config class
-    ...         batch_size = 256
+    Returns:
+        The config field object.
+    """
+    if nullable is not NOT_SET:
+        warnings.warn('`nullable` argument is deprecated.  Use `Optional[T]` '
+                      'as type instead.', DeprecationWarning)
 
-    Then you may construct an instance of :class:`YourConfig` to access
-    these config attributes:
+    # check the type argument.
+    if type is None:
+        # If the type annotation is adopted, it will be later overwritten.
+        if default is not NOT_SET:
+            ti = type_info_from_value(default)
+        elif default_factory is not NOT_SET:
+            ti = type_info_from_value(default_factory())
+        else:
+            ti = AnyTypeInfo()
+    else:
+        ti = type_info(type)
 
-    >>> config = YourConfig()
-    >>> config.max_epoch
-    100
-    >>> config.activation
-    'leaky_relu'
-    >>> config.l2_regularization is None
-    True
-    >>> config.train.batch_size
-    64
-    >>> config.test.batch_size
-    256
+    # check nullable constraint
+    if nullable is not NOT_SET and nullable:
+        if not isinstance(ti, (OptionalTypeInfo, NoneTypeInfo)):
+            ti = OptionalTypeInfo(ti)
 
-    Nested :class:`Config` objects will be copied:
+    # check the choices argument
+    if choices is not None:
+        choices = list(choices)
 
-    >>> config.train is YourConfig.train
-    False
+    return ObjectFieldInfo(
+        name=None,
+        type_info=ti,
+        default=default,
+        default_factory=default_factory,
+        description=description,
+        choices=choices,
+        required=required,
+        envvar=envvar,
+        ignore_empty_env=ignore_empty_env,
+    )
 
-    Nested :class:`Config` sub-classes will be converted into instances:
 
-    >>> YourConfig.test
-    <class 'mltk.config.YourConfig.test'>
-    >>> config.test
-    YourConfig.test(batch_size=256)
+ConfigField = config_field
+"""Legacy name of :func:`config_field`."""
 
-    A :class:`ConfigAttributeNotSetError` will be raised if an attributes
-    is accessed, which is defined by :class:`ConfigField` without a default
-    value, and no user value has been set:
 
-    >>> config.max_step
-    Traceback (most recent call last):
-        ...
-    mltk.config.ConfigAttributeNotSetError: ...
+@dataclass
+class ConfigParams(object):
+    """The parameters of a Config class."""
+    undefined_fields: bool = False
 
-    You may add a new config attribute by simply set its value:
 
-    >>> config.new_attribute = Config(value=123)
-    >>> config.new_attribute.value
+def config_params(undefined_fields: bool = False):
+    """
+    A decorator to set the parameters of a Config class.
+
+    >>> @config_params(undefined_fields=True)
+    ... class MyConfig(Config):
+    ...    pass
+    >>> get_config_params(MyConfig)
+    ConfigParams(undefined_fields=True)
+
+    Note that, the parameters defined by this method will not be inherited,
+    for example:
+
+    >>> class MyInheritedConfig(MyConfig):
+    ...     pass
+    >>> get_config_params(MyInheritedConfig)
+    ConfigParams(undefined_fields=False)
+
+    To define config parameters that can be inherited, you may define a
+    nested class `__ConfigParams__` instead:
+
+    >>> class MyParent(Config):
+    ...     class __ConfigParams__:
+    ...         undefined_fields = True
+
+    >>> class MyChild(MyParent):
+    ...     pass
+
+    >>> get_config_params(MyParent)
+    ConfigParams(undefined_fields=True)
+    >>> get_config_params(MyChild)
+    ConfigParams(undefined_fields=True)
+
+    Args:
+        undefined_fields: Whether or not to allow undefined attributes?
+            Defaults to :obj:`False`.
+
+    Returns:
+        The decorator method.
+    """
+    def wrapper(cls: Type[TConfig]) -> TConfig:
+        params = getattr(cls, _PARAMS)
+        params.undefined_fields = undefined_fields
+        return cls
+    return wrapper
+
+
+def get_config_params(cls: Type[TConfig]) -> ConfigParams:
+    """
+    Get the parameters of specified Config class `cls`.
+
+    Args:
+        cls: The config class.
+
+    Returns:
+        The config class parameters.
+    """
+    return getattr(cls, _PARAMS)
+
+
+class ConfigMeta(type):
+    """
+    Meta class for :class:`Config`.
+
+    This class collects all definitions of the fields and the checkers of
+    any subclass of :class:`Config`, and compile the type information.
+    """
+
+    def __new__(cls, name, parents, dct):
+        # gather the compiled fields and validators from parents
+        fields = {}
+        unbound_checkers: List[ObjectCheckerParams] = []
+
+        def process_field_info(fi: ObjectFieldInfo):
+            # auto set the :obj:`None` default value for Optional[T]
+            if isinstance(fi.type_info, OptionalTypeInfo) and \
+                    fi.default_factory is NOT_SET and \
+                    fi.default is NOT_SET:
+                fi = fi.copy(default=None)
+            return fi
+
+        for parent in parents:
+            if not issubclass(parent, Config):
+                continue
+
+            # inherit field definitions
+            parent_fields = getattr(parent, _FIELDS, {})
+            for key, val in parent_fields.items():
+                if key not in fields:
+                    fields[key] = val
+
+            # inherit checkers
+            for cp in getattr(parent, _UNBOUND_CHECKERS, ()):
+                if cp not in unbound_checkers:
+                    unbound_checkers.append(cp)
+
+        # gather the config fields defined in this class
+        annotations = dct.get('__annotations__', {})
+        cls_fields = {}
+        dct_keys = list(dct)
+
+        for key in dct_keys:
+            val = dct[key]
+
+            # process the checkers
+            if isinstance(val, classmethod):
+                for checker_params in getattr(val, _CHECKER_PARAMS, ()):
+                    unbound_checkers.append(checker_params)
+
+            # process nested config definition
+            elif isinstance(val, type) and issubclass(val, Config):
+                cls_fields[key] = ObjectFieldInfo(
+                    name=key,
+                    type_info=type_info(val),
+                    default_factory=val,
+                )
+
+            # process the fields
+            elif not isinstance(val, (property, staticmethod, type)) and \
+                    not inspect.isfunction(val) and \
+                    not inspect.ismethod(val) and \
+                    not key.startswith('_'):
+                # compile the type info of this field
+                if key in annotations:
+                    ti = type_info(annotations[key])
+                elif not isinstance(val, ObjectFieldInfo):
+                    ti = type_info_from_value(val)
+                else:
+                    ti = val.type_info
+
+                # construct the field info object
+                if isinstance(val, ObjectFieldInfo):
+                    field_info = val.copy(name=key, type_info=ti)
+                else:
+                    field_info = ObjectFieldInfo(
+                        name=key, type_info=ti, default=val)
+                field_info = process_field_info(field_info)
+
+                # add to field list
+                cls_fields[key] = field_info
+                if field_info.default is NOT_SET:
+                    del dct[key]
+                else:
+                    dct[key] = field_info.default
+
+        for key, type_ in annotations.items():
+            # skip private attributes
+            if key.startswith('_'):
+                continue
+            # skip already processed fields
+            if key in cls_fields:
+                continue
+            # now process the field
+            ti = type_info(type_)
+            field_info = process_field_info(
+                ObjectFieldInfo(name=key, type_info=ti))
+            cls_fields[key] = field_info
+
+        # merge the fields and validators from parents and from this class
+        fields.update(cls_fields)
+        fields = {k: fields[k] for k in fields}
+        dct[_FIELDS] = fields
+        dct[_UNBOUND_CHECKERS] = unbound_checkers
+
+        # construct the class
+        ret_cls = super(ConfigMeta, cls).__new__(cls, name, parents, dct)
+
+        # Since this class is being constructed now, the decorator
+        # `config_params` has no chance to take in place, thus the
+        # nested class `__ConfigParams__` is the only way to provide
+        # config class params for the time being.
+        config_params = ConfigParams()
+        config_params_class = getattr(ret_cls, _PARAMS_CLASS_NAME, None)
+        if config_params_class is not None:
+            for key in config_params.__dict__:
+                if hasattr(config_params_class, key):
+                    setattr(config_params, key,
+                            getattr(config_params_class, key))
+        setattr(ret_cls, _PARAMS, config_params)
+
+        # bind the checkers to this class
+        root_checkers = []
+        field_checkers = []
+
+        for checker_params in unbound_checkers:
+            callback = checker_params.method.__get__(ret_cls, ret_cls)
+            if isinstance(checker_params, ObjectRootCheckerParams):
+                root_checkers.append(
+                    ObjectRootChecker(
+                        callback=callback,
+                        pre=checker_params.pre
+                    )
+                )
+            else:
+                field_checkers.append(
+                    ObjectFieldChecker(
+                        fields=checker_params.fields,
+                        callback=callback,
+                        pre=checker_params.pre
+                    )
+                )
+
+        # construct the type info
+        ti = ObjectTypeInfo(
+            object_type=ret_cls,
+            fields=fields,
+            field_checkers=field_checkers,
+            root_checkers=root_checkers,
+        )
+        setattr(ret_cls, TYPE_INFO_MAGIC_FIELD, ti)
+
+        # now return the class
+        return ret_cls
+
+
+@config_params(undefined_fields=True)
+class Config(metaclass=ConfigMeta):
+    """
+    Base class for config classes with type checking.
+
+    Inherit the :class:`Config` class and provide definitions for the fields:
+
+    >>> class MyConfig(Config):
+    ...     a: int = 123
+    ...     b: Optional[float]
+    ...     c: str = config_field(choices=['this', 'that'])
+
+    Default values will be copied to new instances of the config, but the
+    field values will not be checked immediately:
+
+    >>> cfg = MyConfig()
+    >>> cfg
+    MyConfig(a=123, b=None)
+    >>> cfg.a
     123
-
-    You may access the config attributes via a dict-like interface:
-
-    >>> config = YourConfig()
-    >>> 'max_epoch' in config
+    >>> cfg.b is None
     True
-    >>> 'max_step' in config
-    False
-    >>> config['activation']
-    'leaky_relu'
-    >>> config['l2_regularization'] = 0.001
-    >>> config.l2_regularization
-    0.001
-    >>> sorted(config)
-    ['activation', 'l2_regularization', 'max_epoch', 'test', 'train']
-    >>> config['not_exist']
+    >>> cfg.c
     Traceback (most recent call last):
         ...
-    KeyError: 'not_exist'
+    AttributeError: 'MyConfig' object has no attribute 'c'
 
-    Notes:
+    Calling :meth:`check_value()` will check all field values.
 
-        Preserved names cannot be set as config attribute.  For example:
+    >>> validate_config(MyConfig(a='12', b='34.5'))
+    Traceback (most recent call last):
+        ...
+    mltk.utils.type_check.TypeCheckError: at c: field 'c' is required, but its value is not specified
 
-        >>> config['to_dict'] = 123
-        Traceback (most recent call last):
-            ...
-        KeyError: 'to_dict'
+    >>> validate_config(MyConfig(a='12', b='34.5', c='this'))
+    MyConfig(a=12, b=34.5, c='this')
 
-        The values assigned to the attributes of a config object will not be
-        validated until :meth:`validate()` is called.  For example:
+    >>> validate_config(MyConfig(a='12', b='34.5', c='invalid value'))
+    Traceback (most recent call last):
+        ...
+    mltk.utils.type_check.TypeCheckError: at c: invalid value for field 'c': not one of ['this', 'that']
 
-        >>> config = YourConfig(max_step=1000)
-        >>> config.activation = 'invalid'
-        >>> config.activation
-        'invalid'
-        >>> config.validate()
-        Traceback (most recent call last):
-            ...
-        mltk.config.ConfigValidationError: at .activation: value is not one of: ['sigmoid', 'relu', 'leaky_relu']
+    By default, a subclass of :class:`Config` does not accept undefined fields,
+    unless decorated by ``@config_params(undefined_fields=True)``, or a
+    sub-class ``__ConfigParams__`` with attribute ``undefined_fields=True`` is
+    provided:
 
-        See :meth:`validate()` for more details about validation.
+    >>> class MyConfig(Config):
+    ...     pass
+
+    >>> MyConfig(a=1)
+    Traceback (most recent call last):
+        ...
+    ValueError: Field 'a' is not defined for config class: MyConfig
+
+    >>> @config_params(undefined_fields=True)
+    ... class MyConfig(Config):
+    ...     pass
+
+    >>> MyConfig(a=1)
+    MyConfig(a=1)
+
+    >>> class MyConfig(Config):
+    ...     class __ConfigParams__:
+    ...         undefined_fields = True
+
+    >>> MyConfig(a=1)
+    MyConfig(a=1)
     """
 
     def __init__(self, **kwargs):
-        for key in dir(self.__class__):
-            if is_config_attribute(self, key):
-                def_val = getattr(self.__class__, key)
+        params = get_config_params(self.__class__)
+        fields = getattr(self.__class__, _FIELDS)
 
-                if isinstance(def_val, type) and issubclass(def_val, Config):
-                    val = def_val()
-                elif isinstance(def_val, ConfigField):
-                    val = def_val.get_default_value()
-                elif isinstance(def_val, Config):
-                    val = def_val.copy()
-                else:
-                    val = deep_copy(def_val)
+        # store user specified values
+        for key, value in kwargs.items():
+            if not params.undefined_fields and key not in fields:
+                raise ValueError(f'Field {key!r} is not defined for config '
+                                 f'class: {self.__class__.__qualname__}')
+            setattr(self, key, value)
 
-                setattr(self, key, val)
+        # copy default values from the field definition to this object
+        # for unspecified fields
+        for key in fields:
+            if key not in self.__dict__:
+                default_val = fields[key].get_default()
+                if default_val is not NOT_SET:
+                    setattr(self, key, default_val)
 
-        self.update(kwargs)
+    def __getitem__(self, key: str) -> Any:
+        return getattr(self, key)
 
-    def __repr__(self):
-        attributes = [
-            f'{key}={getattr(self, key)!r}' for key in sorted(self)
-        ]
-        return f'{self.__class__.__qualname__}({", ".join(attributes)})'
+    def __setitem__(self, key, value):
+        setattr(self, key, value)
+
+    def __delitem__(self, key: str) -> None:
+        delattr(self, key)
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(self.__dict__)
+
+    def __len__(self) -> int:
+        return len(self.__dict__)
+
+    def __contains__(self, item):
+        return item in self.__dict__
 
     def __eq__(self, other):
         if not isinstance(other, self.__class__):
             return False
-        keys = sorted(self)
-        if keys != sorted(other):
+        if len(self) != len(other):
             return False
-        for key in keys:
-            if self[key] != other[key]:
+        for key in self:
+            if key not in other or self[key] != other[key]:
                 return False
         return True
 
-    def __hash__(self):
-        return hash(tuple([(key, self[key]) for key in sorted(self)]))
+    def __repr__(self):
+        name = self.__class__.__qualname__
+        attributes = ', '.join(f'{key}={self[key]!r}' for key in sorted(self))
+        return f'{name}({attributes})'
 
-    def __getattribute__(self, name):
-        val = object.__getattribute__(self, name)
-        if val is NOT_SET:
-            raise ConfigAttributeNotSetError(name)
-        return val
 
-    def __setattr__(self, name, value):
-        if '.' in name:
-            raise AttributeError(f'`name` must not contain \'.\': {name!r}')
-        if isinstance(value, ConfigField):
-            raise TypeError(f'`value` must not be a ConfigField: got {value!r}')
-        object.__setattr__(self, name, value)
+validate_config = validate_object
+"""Shortcut for :func:`check_value`."""
 
-    def __contains__(self, key):
-        try:
-            return (
-                key in self.__dict__ and
-                getattr(self, key) is not NOT_SET and
-                is_config_attribute(self, key)
-            )
-        except ConfigAttributeNotSetError:
-            return False
 
-    def __getitem__(self, key):
-        if key not in self:
-            raise KeyError(key)
-        return getattr(self, key)
+def config_to_dict(o, flatten: bool = False) -> Dict[str, Any]:
+    """
+    Cast a :class:`Config` instance or a dataclass object into a dict.
 
-    def __setitem__(self, key, value):
-        if not is_config_attribute(self, key, require_existence=False):
-            raise KeyError(key)
-        setattr(self, key, value)
+    >>> cfg = Config(a=1, b=Config(value=2))
+    >>> config_to_dict(cfg)
+    {'a': 1, 'b': Config(value=2)}
+    >>> config_to_dict(cfg, flatten=True)
+    {'a': 1, 'b.value': 2}
 
-    def __iter__(self):
-        return (key for key in self.__dict__ if key in self)
+    Args:
+        o: The object to be casted.  It must be an instance of :class:`Config`
+            or a dataclass object.
+        flatten: Whether or not to flatten all nested objects?
+            Defaults to :obj:`False`.
 
-    def copy(self, **kwargs):
-        """
-        Get a copy of a config object:
+    Returns:
+        The casted dict.
+    """
+    dct = {}
 
-        >>> class YourConfig(Config):
-        ...     nested = Config(c=789)
-
-        >>> config = YourConfig(a=123, b=456)
-        >>> copied = config.copy(a=1230)
-        >>> isinstance(copied, YourConfig)
-        True
-        >>> copied.a
-        1230
-        >>> copied.b
-        456
-        >>> copied.nested.c
-        789
-        >>> copied.nested is config.nested
-        False
-
-        Args:
-            \\**kwargs: The new key and values to be set.
-
-        Returns:
-            The copied config object.
-        """
-        ret = deep_copy(self)
-        for key, val in kwargs.items():
-            setattr(ret, key, val)
-        return ret
-
-    def to_dict(self, deepcopy=False) -> dict:
-        """
-        Convert a config object to a dict.
-
-        All the nested :class:`Config` instances will be converted into dict.
-
-        >>> config = Config(a=123, nested=Config(b=456))
-        >>> config.to_dict()
-        {'a': 123, 'nested': {'b': 456}}
-
-        For object attributes, they will not be copied by default, unless
-        `deepcopy = True`:
-
-        >>> config = Config(value=[1, 2, 3])
-        >>> config.value
-        [1, 2, 3]
-        >>> config.to_dict()['value'] is config.value
-        True
-        >>> config.to_dict(deepcopy=True)['value'] is config.value
-        False
-
-        Args:
-            deepcopy: Whether or not to deep copy the attribute values?
-
-        Returns:
-            The config dict.
-        """
-        ret = {}
-        for key in self:
-            val = self[key]
-            if isinstance(val, Config):
-                ret[key] = val.to_dict()
+    if flatten:
+        def populate_item(key, val):
+            if isinstance(val, Config) or is_dataclass(val):
+                for sub_key, sub_val in \
+                        config_to_dict(val, flatten=flatten).items():
+                    dct[f'{key}.{sub_key}'] = sub_val
             else:
-                if deepcopy:
-                    val = deep_copy(val)
-                ret[key] = val
-        return ret
+                dct[key] = val
+    else:
+        def populate_item(key, val):
+            dct[key] = val
 
-    def to_flatten_dict(self, deepcopy=False) -> dict:
-        """
-        Convert a config object to a flatten dict.
+    if isinstance(o, Config):
+        for key in o:
+            populate_item(key, o[key])
+    elif is_dataclass(o):
+        for key, val in dataclasses.asdict(o).items():
+            populate_item(key, val)
+    else:
+        raise TypeError(f'`o` is neither a Config nor a dataclass object: '
+                        f'{o!r}')
 
-        All values from the nested :class:`Config` and :class:`dict` instances
-        will be gathered into the returned dict.
-
-        >>> config = Config(a=123, nested=Config(b=456))
-        >>> config.to_flatten_dict()
-        {'a': 123, 'nested.b': 456}
-
-        For object attributes, they will not be copied by default, unless
-        `deepcopy = True`:
-
-        >>> config = Config(value={'a': [1, 2, 3]})
-        >>> config2 = config.to_flatten_dict()
-        >>> config2
-        {'value.a': [1, 2, 3]}
-        >>> config2['value.a'] is config.value['a']
-        True
-        >>> config2 = config.to_flatten_dict(deepcopy=True)
-        >>> config2['value.a'] is config.value['a']
-        False
-
-        Args:
-            deepcopy: Whether or not to deep copy the attribute values?
-
-        Returns:
-            The flatten config dict.
-
-        Notes:
-            The flatten dict can be converted back to a :class:`Config`
-            instance by :meth:`ConfigLoader.load_object()`.
-        """
-        def flatten(c, prefix):
-            for key in c:
-                val = c[key]
-                if isinstance(val, (Config, dict)):
-                    flatten(val, f'{prefix}{key}.')
-                else:
-                    if deepcopy:
-                        ret[f'{prefix}{key}'] = deep_copy(val)
-                    else:
-                        ret[f'{prefix}{key}'] = val
-        ret = {}
-        flatten(self, '')
-
-        return ret
-
-    @classmethod
-    def defaults_dict(cls) -> dict:
-        """
-        Get the default values as a dict:
-
-        >>> class YourConfig(Config):
-        ...     a = 123
-        ...     b = ConfigField(int, default=456)
-        ...     missing: int
-        ...     missing2 = ConfigField(int)
-        ...
-        ...     class nested(Config):
-        ...         c = 789
-
-        >>> YourConfig.defaults_dict()
-        {'a': 123, 'b': 456, 'nested': {'c': 789}}
-
-        Returns:
-            The default config dict.
-        """
-        return cls().to_dict()
-
-    @classmethod
-    def defaults_flatten_dict(cls) -> dict:
-        """
-        Get the default values as a flatten dict:
-
-        >>> class YourConfig(Config):
-        ...     a = 123
-        ...     b = ConfigField(int, default=456)
-        ...     missing: int
-        ...     missing2 = ConfigField(int)
-        ...
-        ...     class nested(Config):
-        ...         c = 789
-
-        >>> YourConfig.defaults_flatten_dict()
-        {'a': 123, 'b': 456, 'nested.c': 789}
-
-        Returns:
-            The default config flatten dict.
-        """
-        return cls().to_flatten_dict()
-
-    def update(self, key_values: Union['Config', dict]):
-        """
-        Recursively update all nested config objects.
-
-        Directly setting the config attributes will override any nested
-        config object using the specified new value.  For example:
-
-        >>> config = Config(nested=Config(value=123))
-        >>> config.nested
-        Config(value=123)
-        >>> config.nested = {'new_value': 123}
-        >>> config.nested
-        {'new_value': 123}
-
-        If you intend to update the nested config objects using the new
-        values, you should use :meth:`update()` as follows:
-
-        >>> config = Config(nested=Config(value=123))
-        >>> config.update({'nested': {'value2': 456}})
-        >>> config.nested
-        Config(value=123, value2=456)
-
-        It is also possible to call :meth:`update()` with another config object:
-
-        >>> config = Config(nested=Config(value=123))
-        >>> config.update(Config(nested=Config(value=1230, value2=456)))
-        >>> config.nested
-        Config(value=1230, value2=456)
-
-        Args:
-            key_values: The new key and values.
-
-        Notes:
-            When loading config attributes from multiple dicts by
-            :meth:`update()`, it is important to call :meth:`validate()`
-            after each call to :meth:`update()`.
-            This will correctly convert all nested dicts into nested config
-            objects, for example:
-
-            >>> class ParentConfig(Config):
-            ...     child = ConfigField(Config)
-
-            >>> config = ParentConfig()
-            >>> config.update({'child': {'a': 1}})
-            >>> config.validate()
-            ParentConfig(child=Config(a=1))
-            >>> config.update({'child': {'b': 2}})
-            >>> config.validate()
-            ParentConfig(child=Config(a=1, b=2))
-
-            In contrary, if :meth:`validate()` is not called, then the second
-            update will override the first update:
-
-            >>> config = ParentConfig()
-            >>> config.update({'child': {'a': 1}})
-            >>> config.update({'child': {'b': 2}})
-            >>> config.validate()
-            ParentConfig(child=Config(b=2))
-
-            Sometimes the first few updates will not set all missing fields,
-            in which cases :meth:`validate(ignore_missing=True)` should be used.
-            For example:
-
-            >>> config = ParentConfig()
-            >>> config.update({'new_value': 123})
-            >>> config.validate()  # will fail with an error
-            Traceback (most recent call last):
-                ...
-            mltk.config.ConfigValidationError: at .child: config attribute is required but not set
-            >>> config.validate(ignore_missing=True)  # okay
-            ParentConfig(new_value=123)
-        """
-        for key in key_values:
-            val = key_values[key]
-
-            try:
-                self_val = getattr(self, key, None)
-            except ConfigAttributeNotSetError:
-                self_val = None
-
-            if isinstance(self_val, Config) and \
-                    isinstance(val, (Config, dict, OrderedDict)):
-                self_val.update(val)
-            else:
-                setattr(self, key, val)
-
-    def user_validate(self) -> None:
-        """
-        Validate the attributes and convert the values into desired types,
-        designed to be implemented by user.
-
-        >>> class YourConfig(Config):
-        ...     value = 123
-        ...
-        ...     def user_validate(self):
-        ...         if self.value < 100:
-        ...             raise ValueError('`value` must >= 100.')
-
-        >>> config = YourConfig()
-        >>> config.validate()
-        YourConfig(value=123)
-        >>> config.value = 99
-        >>> config.validate()
-        Traceback (most recent call last):
-            ...
-        mltk.config.ConfigValidationError: `value` must >= 100.
-        """
-
-    def validate(self, ignore_missing: bool = False,
-                 validate_all: bool = False):
-        """
-        Validate the attributes, and convert the values into desired types.
-
-        :meth:`validate()` will not only raise error if any attribute cannot
-        pass validation.  It will also convert the attribute values into their
-        desired types.  Note the return value of :meth:`validate()` is the
-        config object itself.  For example:
-
-        >>> class YourConfig(Config):
-        ...     a = 123  # int attribute
-        ...     b = ConfigField(float)  # float attribute, without default value
-        ...     c: float  # float attribute, without default value
-        ...
-        ...     class nested(Config):
-        ...         d = ConfigField(default=10000)
-
-        >>> config = YourConfig(a='1230', b='0.001', c='1.5')
-        >>> config
-        YourConfig(a='1230', b='0.001', c='1.5', nested=YourConfig.nested(d=10000))
-        >>> validated = config.validate()
-        >>> validated
-        YourConfig(a=1230, b=0.001, c=1.5, nested=YourConfig.nested(d=10000))
-        >>> validated is config
-        True
-
-        If the expected type of a config attribute is :class:`Config` or any
-        sub-class of :class:`Config`, and the value assigned to it is a dict
-        or a config object, its type will be converted to the correct config
-        type, if necessary.  For example:
-
-        >>> config = YourConfig(b=456, c=789)
-        >>> config.nested = {'d': '10000'}
-        >>> config
-        YourConfig(a=123, b=456, c=789, nested={'d': '10000'})
-        >>> config.validate()
-        YourConfig(a=123, b=456.0, c=789.0, nested=YourConfig.nested(d=10000))
-
-        >>> config = YourConfig(b=456, c=789)
-        >>> config.nested = Config()
-        >>> config
-        YourConfig(a=123, b=456, c=789, nested=Config())
-        >>> config.validate()
-        YourConfig(a=123, b=456.0, c=789.0, nested=YourConfig.nested(d=10000))
-
-        >>> class NestedSubclass(YourConfig.nested):
-        ...     e = 'hello'
-
-        >>> config = YourConfig(b=456, c=789)
-        >>> config.nested = NestedSubclass()
-        >>> config
-        YourConfig(a=123, b=456, c=789, nested=NestedSubclass(d=10000, e='hello'))
-        >>> config.validate()
-        YourConfig(a=123, b=456.0, c=789.0, nested=NestedSubclass(d=10000, e='hello'))
-
-        If you want to collect all the errors, rather than the first error,
-        you may pass `validate_all = True`.  For example:
-
-        >>> config = YourConfig(a='invalid int', b='invalid float', c='invalid float2')
-        >>> config.validate(validate_all=True)
-        Traceback (most recent call last):
-            ...
-        mltk.config.ConfigValidationError: at .a: invalid literal for int() with base 10: 'invalid int'
-        at .b: could not convert string to float: 'invalid float'
-        at .c: could not convert string to float: 'invalid float2'
-
-        Args:
-            ignore_missing: Whether or not to ignore missing attribute?
-                (i.e., attribute defined by :class:`ConfigField` without
-                a default value, to which the user has not set a value)
-            validate_all: Whether or not to validate all fields even if
-                some attribute already has an error?
-
-        Returns:
-            The validated config object.
-        """
-        context = ValidationContext(ignore_missing=ignore_missing,
-                                    validate_all=validate_all)
-        ret = ConfigValidator(self.__class__).validate(self, context)
-        if validate_all:
-            context.throw()
-        assert(isinstance(ret, self.__class__))
-        return ret
+    return dct
 
 
-TConfig = TypeVar('TConfig')
+def config_defaults(config: Union[TConfig, Type[TConfig]]) -> TConfig:
+    """
+    Get the default values of a specified config class.
+
+    >>> class MyConfig(Config):
+    ...     a: int = 123
+    ...     b: float
+
+    >>> config_defaults(MyConfig)
+    MyConfig(a=123)
+    >>> config_defaults(MyConfig(a=456, b=789.0))
+    MyConfig(a=123)
+
+    Args:
+        config: An instance of a Config class, or a Config class.
+
+    Returns:
+        An instance of the Config class with all fields filled with defaults.
+    """
+    if isinstance(config, type):
+        config_cls = config
+    else:
+        config_cls = config.__class__
+    if not issubclass(config_cls, Config):
+        raise TypeError(f'`config` is neither an instance of Config, nor a '
+                        f'subclass of Config: got {config!r}')
+    return config_cls()
+
+
+class LeafDict(dict):
+    """
+    A specialized sub-class of dict, such that it will not be unflatten
+    when populating the fields of a :class:`Config` object.
+    """
 
 
 class ConfigLoader(Generic[TConfig]):
@@ -743,15 +659,12 @@ class ConfigLoader(Generic[TConfig]):
     A class to help load config attributes from multiple sources.
     """
 
-    def __init__(self, config_or_cls: Union[Type[TConfig], TConfig],
-                 validate_all: bool = False):
+    def __init__(self, config_or_cls: Union[Type[TConfig], TConfig]):
         """
         Construct a new :class:`ConfigLoader`.
 
         Args:
             config_or_cls: A config object, or a config class.
-            validate_all: Whether or not to validate all fields even if
-                some attribute already has an error?
         """
         if isinstance(config_or_cls, type):
             config_cls = config_or_cls
@@ -765,16 +678,12 @@ class ConfigLoader(Generic[TConfig]):
                             f'nor a Config instance: {config_or_cls!r}')
 
         self._config_cls = config_cls
+        self._config_type_info = type_info(config_cls)
         self._config = config
-        self._validate_all = validate_all
 
     @property
     def config_cls(self) -> Type[TConfig]:
         return self._config_cls
-
-    @property
-    def validate_all(self) -> bool:
-        return self._validate_all
 
     def get(self, ignore_missing: bool = False) -> TConfig:
         """
@@ -783,12 +692,14 @@ class ConfigLoader(Generic[TConfig]):
         Args:
             ignore_missing: Whether or not to ignore missing attribute?
                 (i.e., attribute defined by :class:`ConfigField` without
-                a default value, to which the user has not set a value)
+                a default value and user specified value)
         """
-        return self._config.validate(ignore_missing=ignore_missing,
-                                     validate_all=self.validate_all)
+        return self._config_type_info.check_value(
+            self._config,
+            TypeCheckContext(ignore_missing=ignore_missing)
+        )
 
-    def load_object(self, key_values: Union[dict, Config]):
+    def load_object(self, key_values: Union[Mapping, Config]):
         """
         Load config attributes from the specified `key_values` object.
 
@@ -800,9 +711,11 @@ class ConfigLoader(Generic[TConfig]):
         ...     a = 123
         ...     b = ConfigField(float, default=None)
 
-        >>> class YourConfig(Config):
+        >>> @config_params(undefined_fields=True)
+        ... class YourConfig(Config):
         ...     nested1: ConfigNested1
         ...
+        ...     @config_params(undefined_fields=True)
         ...     class nested2(Config):
         ...         c = 789
 
@@ -831,7 +744,7 @@ class ConfigLoader(Generic[TConfig]):
         Args:
             key_values: The dict or config object.
         """
-        if not isinstance(key_values, (dict, Config)):
+        if not isinstance(key_values, (Mapping, Config)):
             raise TypeError(f'`key_values` must be a dict or a Config object: '
                             f'got {key_values!r}')
 
@@ -859,11 +772,13 @@ class ConfigLoader(Generic[TConfig]):
                 src_val = src[key]
                 try:
                     dst_val = getattr(tmp, part)
-                except (ConfigAttributeNotSetError, AttributeError):
+                except AttributeError:
                     dst_val = NOT_SET
 
                 # now copy the values to the target node
-                if isinstance(src_val, (dict, Config)):
+                if isinstance(src_val, LeafDict):
+                    new_val = src_val
+                elif isinstance(src_val, (dict, Config)):
                     if dst_val is NOT_SET:
                         new_val = copy_values(
                             src_val, Config(), prefix=prefix + key + '.')
@@ -872,8 +787,6 @@ class ConfigLoader(Generic[TConfig]):
                             src_val, dst_val, prefix=prefix + key + '.')
                     else:
                         raise ValueError(err_msg2())
-                elif isinstance(src_val, StrictDict):
-                    new_val = src_val.value
                 else:
                     if isinstance(dst_val, Config):
                         raise ValueError(err_msg1())
@@ -884,9 +797,22 @@ class ConfigLoader(Generic[TConfig]):
 
             return dst
 
-        self._config.update(copy_values(key_values, Config(), prefix='.'))
+        def update_config(config, source):
+            for key in source:
+                val = source[key]
+                self_val = getattr(config, key, None)
+                if isinstance(self_val, Config) and \
+                        isinstance(val, (Config, Mapping)):
+                    update_config(self_val, val)
+                else:
+                    setattr(config, key, val)
 
-    def load_json(self, path: Union[str, bytes, PathLike], cls=None):
+        update_config(
+            self._config,
+            copy_values(key_values, Config(), prefix='.')
+        )
+
+    def load_json(self, path: Union[str, bytes, os.PathLike], cls=None):
         """
         Load config from a JSON file.
 
@@ -898,7 +824,7 @@ class ConfigLoader(Generic[TConfig]):
             obj = json.load(f, cls=cls)
             self.load_object(obj)
 
-    def load_yaml(self, path: Union[str, bytes, PathLike],
+    def load_yaml(self, path: Union[str, bytes, os.PathLike],
                   Loader=yaml.SafeLoader):
         """
         Load config from a YAML file.
@@ -912,7 +838,7 @@ class ConfigLoader(Generic[TConfig]):
             if obj is not None:
                 self.load_object(obj)
 
-    def load_file(self, path: Union[str, bytes, PathLike]):
+    def load_file(self, path: Union[str, bytes, os.PathLike]):
         """
         Load config from a file.
 
@@ -949,29 +875,19 @@ class ConfigLoader(Generic[TConfig]):
         Returns:
             The argument parser.
         """
-
         class _ConfigAction(Action):
 
-            def __init__(self, validator: Validator, option_strings, dest,
+            def __init__(self, type_info: TypeInfo, option_strings, dest,
                          **kwargs):
                 super().__init__(option_strings, dest, **kwargs)
-                self._validator = validator
+                self.type_info = type_info
 
             def __call__(self, parser, namespace, values,
                          option_string=None):
                 try:
-                    if self._validator is None or (
-                            isinstance(self._validator, FieldValidator) and
-                            self._validator.sub_validator is None):
-                        try:
-                            value = yaml.load(values, Loader=yaml.SafeLoader)
-                        except yaml.YAMLError:
-                            value = str(values)
-                    else:
-                        context = ValidationContext()
-                        with context.enter(f'.{self.dest}'):
-                            value = self._validator.validate(values,
-                                                             context)
+                    context = TypeCheckContext()
+                    with context.enter(f'.{self.dest}'):
+                        value = self.type_info.parse_string(values, context)
 
                 except Exception as ex:
                     message = f'Invalid value for argument `{option_string}`'
@@ -982,61 +898,48 @@ class ConfigLoader(Generic[TConfig]):
                     raise ValueError(message)
                 else:
                     if isinstance(value, dict):
-                        value = StrictDict(value)
+                        value = LeafDict(value)
                     setattr(namespace, self.dest, value)
 
         # gather the nested config fields
-        def get_field_help(field):
-            config_help = field.description or ''
-            default_value = field.get_default_value()
+        def get_field_help(field_info: ObjectFieldInfo):
+            config_help = field_info.description or ''
+            default_value = field_info.get_default()
             if config_help:
                 config_help += ' '
             if default_value is NOT_SET:
-                config_help += '(required'
+                if field_info.required:
+                    config_help += '(required'
+                else:
+                    config_help += '(optional'
             else:
                 config_help += f'(default {default_value!r}'
-            if field.choices:
-                config_help += f'; choices {sorted(field.choices)}'
+            if field_info.choices:
+                config_help += f'; choices {list(field_info.choices)}'
             config_help += ')'
             return config_help
 
-        def gather_args(cls, prefix):
+        def gather_args(ti: ObjectTypeInfo, prefix: str):
             if prefix:
                 prefix += '.'
 
-            annotations = getattr(cls, '__annotations__', {})
-            annotated_keys = list(annotations)
-
-            for key in sorted(set(list(dir(cls)) + annotated_keys)):
-                if is_config_attribute(cls, key):
-                    val = getattr(cls, key, None)
-                    validator = get_validator(val, annotations.get(key))
-
-                    if isinstance(validator, ConfigValidator):
-                        gather_args(validator.config_cls, prefix + key)
-                    elif isinstance(validator, FieldValidator) and \
-                            isinstance(validator.sub_validator,
-                                       ConfigValidator):
-                        gather_args(validator.sub_validator.config_cls,
-                                    prefix + key)
-                    else:
-                        option_string = f'--{prefix}{key}'
-
-                        if isinstance(val, ConfigField):
-                            help_msg = get_field_help(val)
-                        else:
-                            help_msg = f'(default {val})'
-
-                        parser.add_argument(
-                            option_string, help=help_msg,
-                            action=_ConfigAction, validator=validator,
-                            default=NOT_SET
-                        )
+            for field_name in sorted(ti.fields):
+                field_info = ti.fields[field_name]
+                if isinstance(field_info.type_info, ObjectTypeInfo):
+                    gather_args(field_info.type_info, prefix + field_name)
+                else:
+                    option_string = f'--{prefix}{field_name}'
+                    help_msg = get_field_help(field_info)
+                    parser.add_argument(
+                        option_string, help=help_msg,
+                        action=_ConfigAction, type_info=field_info.type_info,
+                        default=NOT_SET, metavar=str(field_info.type_info),
+                    )
 
         # populate the arguments
         if parser is None:
             parser = ArgumentParser()
-        gather_args(self.config_cls, '')
+        gather_args(type_info(self.config_cls), '')
 
         return parser
 
@@ -1068,680 +971,3 @@ class ConfigLoader(Generic[TConfig]):
         parsed = {key: value for key, value in vars(namespace).items()
                   if value is not NOT_SET}
         self.load_object(parsed)
-
-
-TValue = TypeVar('TValue')
-PatternType = type(re.compile('x'))
-
-
-def deep_copy(value: TValue) -> TValue:
-    """
-    A patched deep copy function, that can handle various types cannot be
-    handled by the standard :func:`copy.deepcopy`.
-
-    Args:
-        value: The value to be copied.
-
-    Returns:
-        The copied value.
-    """
-    def pattern_dispatcher(v, memo=None):
-        return v  # we don't need to copy a regex pattern object, it's read-only
-
-    old_dispatcher = copy._deepcopy_dispatch.get(PatternType, None)
-    copy._deepcopy_dispatch[PatternType] = pattern_dispatcher
-    try:
-        return copy.deepcopy(value)
-    finally:
-        if old_dispatcher is not None:  # pragma: no cover
-            copy._deepcopy_dispatch[PatternType] = old_dispatcher
-        else:
-            del copy._deepcopy_dispatch[PatternType]
-
-
-class StrictDict(object):
-    """
-    Class to wrap a dict, such that :meth:`ConfigLoader.load_object()`
-    will not interpret it as a nested config object.
-    """
-
-    def __init__(self, value):
-        self.value = value
-
-
-def is_config_attribute(cls_or_obj: Union[Type['Config'], 'Config'],
-                        name: str, require_existence: bool = True) -> bool:
-    """
-    Test whether or not `name` is a config attribute of `cls_or_obj`.
-
-    An attribute is a config attribute if it is a public data attribute
-    (i.e., not a method, not a property, not starting with "_"), and is
-    not a direct member of the base :class:`Config` class.
-
-    Args:
-        cls_or_obj: A subclass of :class:`Config`, or an instance of
-            any subclass of :class:`Config`.
-        name: The attribute name to be tested.
-        require_existence: Whether or not to require the existence of the
-            attribute?
-
-    Returns:
-        Whether or not `name` is a config attribute.
-    """
-    if name.startswith('_') or hasattr(Config, name):
-        return False
-
-    annotated = (isinstance(cls_or_obj, type) and
-                 hasattr(cls_or_obj, '__annotations__') and
-                 name in cls_or_obj.__annotations__)
-
-    try:
-        if not annotated and not hasattr(cls_or_obj, name):
-            return not require_existence
-    except ConfigAttributeNotSetError:
-        return True
-
-    if isinstance(cls_or_obj, type):
-        cls_val = getattr(cls_or_obj, name, None)
-    else:
-        cls_val = getattr(cls_or_obj.__class__, name, None)
-
-    if not isinstance(cls_val, type):
-        if isinstance(cls_val, property) or \
-                inspect.ismethod(cls_val) or \
-                inspect.isfunction(cls_val):
-            return False
-
-    return True
-
-
-class ValidationContext(object):
-    """Maintain the context for validation."""
-
-    def __init__(self, strict: bool = False, ignore_missing: bool = False,
-                 validate_all: bool = False):
-        """
-        Construct a new :class:`ValidatorContext`.
-
-        Args:
-            strict: If :obj:`True`, disable type conversion.
-                If :obj:`False`, the validator will try its best to convert the
-                input `value` into desired type.
-            ignore_missing: Whether or not to ignore missing attribute?
-                (i.e., attribute defined by :class:`ConfigField` without
-                a default value, to which the user has not set a value)
-            validate_all: Whether or not to validate all fields even if
-                some attribute already has an error?
-        """
-        self._scopes = []
-        self._errors = []
-        self._strict = strict
-        self._ignore_missing = ignore_missing
-        self._validate_all = validate_all
-
-    @contextmanager
-    def enter(self, scope: str):
-        try:
-            self._scopes.append(scope)
-            yield
-        finally:
-            self._scopes.pop()
-
-    @property
-    def strict(self) -> bool:
-        return self._strict
-
-    @property
-    def ignore_missing(self) -> bool:
-        return self._ignore_missing
-
-    @property
-    def validate_all(self) -> bool:
-        return self._validate_all
-
-    def get_path(self) -> str:
-        return ''.join(self._scopes)
-
-    def add_error(self, error: Union[Exception, str]):
-        """
-        Add a validation error.
-
-        Args:
-            error: An exception or an error message.
-        """
-        err = ValidationErrorInfo(self.get_path(), str(error))
-        if not self.validate_all:
-            raise ConfigValidationError([err])
-        else:
-            self._errors.append(err)
-
-    def throw(self):
-        """Throw the error."""
-        if self._errors:
-            raise ConfigValidationError(self._errors)
-
-
-class Validator(object):
-    """Base config validator."""
-
-    def __repr__(self):
-        return f'{self.__class__.__qualname__}()'
-
-    def _validate(self, value, context: ValidationContext):
-        raise NotImplementedError()
-
-    def validate(self, value, context: Optional[ValidationContext] = None):
-        """
-        Validate the `value`.
-
-        Args:
-            value: The value to be validated.
-            context: The context for validator.
-
-        Returns:
-            The validated value.
-
-        Raises:
-            ConfigValidationError: If the value cannot pass validation.
-        """
-        if context is None:
-            context = ValidationContext()
-        try:
-            return self._validate(value, context)
-        except ConfigValidationError:
-            raise  # do not re-generate the validation errors
-        except Exception as ex:
-            context.add_error(ex)
-            return value
-
-
-class CustomValidator(Validator):
-    """Custom validator function wrapper."""
-
-    def __init__(self, validator_fn: ValidatorFunctionType):
-        self._validator_fn = validator_fn
-
-    @property
-    def validator_fn(self) -> ValidatorFunctionType:
-        """Get the validator function."""
-        return self._validator_fn
-
-    def __repr__(self):
-        return f'{self.__class__.__qualname__}({self.validator_fn})'
-
-    def _validate(self, value, context: ValidationContext):
-        return self.validator_fn(value)
-
-
-class FieldValidator(Validator):
-    """
-    Validator for a specified config attribute.
-
-    >>> class YourConfig(Config):
-    ...     a = ConfigField(int)
-    ...     b = ConfigField(float, nullable=False)
-    ...     c = ConfigField(str, choices=['hello', 'bye'])
-
-    >>> validator = FieldValidator(YourConfig.a)
-    >>> validator.validate('123')
-    123
-    >>> validator.validate(None)
-
-    >>> validator = FieldValidator(YourConfig.b)
-    >>> validator.validate('123.5')
-    123.5
-    >>> validator.validate(None)
-    Traceback (most recent call last):
-        ...
-    mltk.config.ConfigValidationError: null value is not allowed
-
-    >>> validator = FieldValidator(YourConfig.c)
-    >>> validator.validate('hello')
-    'hello'
-    >>> validator.validate('invalid str')
-    Traceback (most recent call last):
-        ...
-    mltk.config.ConfigValidationError: value is not one of: ['hello', 'bye']
-    """
-
-    def __init__(self, field: ConfigField):
-        self._field = field
-        if field.validator_fn is not None:
-            self._sub_validator = CustomValidator(field.validator_fn)
-        elif field.type is not None:
-            self._sub_validator = get_validator(field.type)
-        else:
-            self._sub_validator = get_validator(field.default_value)
-
-    def __repr__(self):
-        return f'FieldValidator({self.field!r})'
-
-    @property
-    def field(self):
-        return self._field
-
-    @property
-    def sub_validator(self) -> Optional[Validator]:
-        return self._sub_validator
-
-    def _validate(self, value, context):
-        if value is not None and self.sub_validator is not None:
-            value = self.sub_validator.validate(value, context)
-
-        if value is None:
-            if not self.field.nullable:
-                context.add_error('null value is not allowed')
-
-        else:
-            if self.field.choices and value not in self.field.choices:
-                context.add_error(f'value is not one of: '
-                                  f'{list(self.field.choices)}')
-
-        return value
-
-
-def get_validator(type_or_value,
-                  additional_type: Optional[type] = None
-                  ) -> Optional[Validator]:
-    """
-    Get the validator for specified type or value, or config attribute.
-
-    >>> class YourConfig(Config):
-    ...     value = ConfigField(int, choices=[1, 2, 3])
-
-    >>> get_validator(int)
-    IntValidator()
-    >>> get_validator(123)
-    IntValidator()
-    >>> get_validator(float)
-    FloatValidator()
-    >>> get_validator(123.5)
-    FloatValidator()
-    >>> get_validator(bool)
-    BoolValidator()
-    >>> get_validator(True)
-    BoolValidator()
-    >>> get_validator(str)
-    StrValidator()
-    >>> get_validator('hello')
-    StrValidator()
-    >>> get_validator(YourConfig)
-    ConfigValidator(YourConfig)
-    >>> get_validator(YourConfig())
-    ConfigValidator(YourConfig)
-    >>> get_validator(YourConfig.value)
-    FieldValidator(ConfigField(type=int, nullable=True, choices=[1, 2, 3]))
-    >>> get_validator(dict)
-    >>> get_validator([])
-
-    Args:
-        type_or_value: The type or the value.
-        additional_type: An additional type hint.
-
-    Returns:
-        The Validator, or :obj:`None` if no validator can be provided.
-    """
-    if isinstance(type_or_value, type):
-        type_ = type_or_value
-        value = None
-    elif type_or_value is not None:
-        type_ = type_or_value.__class__
-        value = type_or_value
-    else:
-        type_ = additional_type
-        value = type_or_value
-
-    if type_ == int:
-        return IntValidator()
-    elif type_ == float:
-        return FloatValidator()
-    elif type_ == bool:
-        return BoolValidator()
-    elif type_ in (str, bytes):
-        return StrValidator()
-    elif isinstance(type_, type) and issubclass(type_, Config):
-        return ConfigValidator(type_)
-    elif isinstance(type_, type) and isinstance(value, ConfigField):
-        if additional_type is not None:
-            value = value.set_type(additional_type)
-        return FieldValidator(value)
-    else:
-        return None
-
-
-class IntValidator(Validator):
-    """
-    Validator for integer values.
-
-    >>> validator = IntValidator()
-    >>> validator.validate(123)
-    123
-    >>> validator.validate(123.0)
-    123
-    >>> validator.validate('123')
-    123
-    >>> validator.validate(123.5)
-    Traceback (most recent call last):
-        ...
-    mltk.config.ConfigValidationError: ...
-    """
-
-    def _validate(self, value, context):
-        if not context.strict:
-            int_value = int(value)
-            float_value = float(value)
-            if np.abs(int_value - float_value) > np.finfo(float_value).eps:
-                context.add_error(
-                    'casting a float number into integer is not allowed')
-            value = int_value
-        if not isinstance(value, int):
-            context.add_error('value is not an integer')
-        return value
-
-
-class FloatValidator(Validator):
-    """
-    Validator for float values.
-
-    >>> validator = FloatValidator()
-    >>> validator.validate(123)
-    123.0
-    >>> validator.validate(123.0)
-    123.0
-    >>> validator.validate('123.0')
-    123.0
-    >>> validator.validate(123.5)
-    123.5
-    """
-
-    def _validate(self, value, context):
-        if not context.strict:
-            value = float(value)
-        if not isinstance(value, float):
-            context.add_error('value is not a float number')
-        return value
-
-
-class BoolValidator(Validator):
-    """
-    Validator for boolean values.
-
-    >>> validator = BoolValidator()
-    >>> validator.validate(True)
-    True
-    >>> validator.validate(1)
-    True
-    >>> validator.validate('1')
-    True
-    >>> validator.validate('on')
-    True
-    >>> validator.validate('yes')
-    True
-    >>> validator.validate('true')
-    True
-    >>> validator.validate(False)
-    False
-    >>> validator.validate(0)
-    False
-    >>> validator.validate('0')
-    False
-    >>> validator.validate('off')
-    False
-    >>> validator.validate('no')
-    False
-    >>> validator.validate('false')
-    False
-    >>> validator.validate('bad literal')
-    Traceback (most recent call last):
-        ...
-    mltk.config.ConfigValidationError: ...
-    """
-
-    def _validate(self, value, context):
-        if not context.strict:
-            if isinstance(value, (str, bytes)):
-                value = str(value).lower()
-                if value in ('1', 'on', 'yes', 'true'):
-                    value = True
-                elif value in ('0', 'off', 'no', 'false'):
-                    value = False
-            elif isinstance(value, int):
-                if value == 1:
-                    value = True
-                elif value == 0:
-                    value = False
-            if not isinstance(value, bool):
-                context.add_error('value cannot be casted into boolean')
-        else:
-            if not isinstance(value, bool):
-                context.add_error('value is not a boolean')
-        return value
-
-
-class StrValidator(Validator):
-    """
-    Validator for string values.
-
-    >>> validator = StrValidator()
-    >>> validator.validate('hello')
-    'hello'
-    >>> validator.validate(123)
-    '123'
-    """
-
-    def _validate(self, value, context):
-        if not context.strict:
-            value = str(value)
-        if not isinstance(value, str):
-            context.add_error('value is not a string')
-        return value
-
-
-class ConfigValidator(Validator):
-    """
-    Validator for :class:`Config` objects.
-
-    Build the validator according to a config class:
-
-    >>> class YourConfig(Config):
-    ...     max_epoch = 100
-    ...     max_step: int
-    ...     learning_rate = ConfigField(float, default=None)
-
-    >>> validator = ConfigValidator(YourConfig)
-    >>> value = {'max_step': 1000, 'new_value': 123}
-
-    Dict can be casted into expected config class:
-
-    >>> validator.validate(value)
-    YourConfig(learning_rate=None, max_epoch=100, max_step=1000, new_value=123)
-
-    Config objects which are not instances of the expected config class
-    can be casted into the expected config class:
-
-    >>> value = Config(max_epoch=200, max_step=2000)
-    >>> validator.validate(value)
-    YourConfig(learning_rate=None, max_epoch=200, max_step=2000)
-
-    Config objects which are already instances of the expected config class
-    are validated and returned directly:
-
-    >>> value = YourConfig(max_step=1250)
-    >>> validator.validate(value)
-    YourConfig(learning_rate=None, max_epoch=100, max_step=1250)
-    >>> validator.validate(value) is value
-    True
-
-    Un-set attributes will throw an error, unless `ignore_missing` is True:
-
-    >>> value = YourConfig()
-    >>> validator.validate(value)
-    Traceback (most recent call last):
-        ...
-    mltk.config.ConfigValidationError: at .max_step: config attribute is required but not set
-    >>> validator.validate(value, ValidationContext(ignore_missing=True))
-    YourConfig(learning_rate=None, max_epoch=100)
-
-    Validating incompatible objects will throw an error:
-
-    >>> validator.validate('hello')
-    Traceback (most recent call last):
-        ...
-    mltk.config.ConfigValidationError: value cannot be casted into YourConfig
-    """
-
-    def __init__(self, config_cls: Type[Config]):
-        """
-        Construct a new :class:`ConfigClassValidator`.
-
-        Args:
-            config_cls: The config class.
-        """
-        if not isinstance(config_cls, type) or \
-                not issubclass(config_cls, Config):
-            raise TypeError(f'`config_cls` is not Config class or a '
-                            f'sub-class of Config: {config_cls}')
-        self._config_cls = config_cls
-
-    def __repr__(self):
-        return f'{self.__class__.__qualname__}({self.config_cls.__qualname__})'
-
-    @property
-    def config_cls(self) -> Type[Config]:
-        return self._config_cls
-
-    def _validate(self, value, context):
-        if not context.strict:
-            if isinstance(value, self.config_cls):
-                pass
-            elif isinstance(value, (dict, OrderedDict, Config)):
-                old_value = value
-                value = self.config_cls()
-                value.update(old_value)
-            else:
-                context.add_error(f'value cannot be casted into '
-                                  f'{self.config_cls.__qualname__}')
-                return value
-        else:
-            if not isinstance(value, self.config_cls):
-                context.add_error(f'value is not a '
-                                  f'{self.config_cls.__qualname__}')
-                return value
-
-        annotations = getattr(self.config_cls, '__annotations__', {})
-
-        for key in sorted(set(list(dir(self.config_cls)) + list(annotations))):
-            if is_config_attribute(self.config_cls, key):
-                cls_val = getattr(self.config_cls, key, None)
-
-                # get the validator
-                validator = get_validator(cls_val, annotations.get(key))
-
-                # validate the value
-                if validator is not None:
-                    with context.enter(f'.{key}'):
-                        try:
-                            if not hasattr(value, key):
-                                # if `key` attribute is annotated rather
-                                # than a ConfigField instance
-                                raise ConfigAttributeNotSetError(key)
-                            val = getattr(value, key)
-                            if isinstance(validator, FieldValidator) or \
-                                    val is not None:
-                                val = validator.validate(val, context)
-                        except ConfigAttributeNotSetError as ex:
-                            if not context.ignore_missing:
-                                context.add_error('config attribute is '
-                                                  'required but not set')
-                        else:
-                            setattr(value, key, val)
-
-        try:
-            value.user_validate()
-        except Exception as ex:
-            context.add_error(ex)
-
-        return value
-
-
-KeyValuesType = Union[Dict, Config, Iterable[Tuple[str, Any]]]
-
-
-def format_key_values(key_values: KeyValuesType,
-                      title: Optional[str] = None,
-                      formatter: Callable[[Any], str] = str,
-                      delimiter_char: str = '=') -> str:
-    """
-    Format key value sequence into str.
-
-    The basic usage, to format a :class:`Config`, a dict or a list of tuples:
-
-    >>> print(format_key_values(Config(a=123, b=Config(value=456))))
-    a         123
-    b.value   456
-    >>> print(format_key_values({'a': 123, 'b': {'value': 456}}))
-    a   123
-    b   {'value': 456}
-    >>> print(format_key_values([('a', 123), ('b', {'value': 456})]))
-    a   123
-    b   {'value': 456}
-
-    To add a title and a delimiter:
-
-    >>> print(format_key_values(Config(a=123, b=Config(value=456)),
-    ...                         title='short title'))
-    short title
-    =============
-    a         123
-    b.value   456
-    >>> print(format_key_values({'a': 123, 'b': {'value': 456}},
-    ...                         title='long long long title'))
-    long long long title
-    ====================
-    a   123
-    b   {'value': 456}
-
-    Args:
-        key_values: The sequence of key values, may be a :class:`Config`,
-            a dict, or a list of (key, value) pairs.
-            If it is a :class:`Config`, it will be flatten via
-            :meth:`Config.to_flatten_dict()`.
-        title: If specified, will prepend a title and a horizontal delimiter
-            to the front of returned string.
-        formatter: The function to format values.
-        delimiter_char: The character to use for the delimiter between title
-            and config key values.
-
-    Returns:
-        The formatted str.
-    """
-    if len(delimiter_char) != 1:
-        raise ValueError(f'`delimiter_char` must be one character: '
-                         f'got {delimiter_char!r}')
-
-    if isinstance(key_values, Config):
-        key_values = key_values.to_flatten_dict()
-
-    if hasattr(key_values, 'items'):
-        data = [(key, formatter(value)) for key, value in key_values.items()]
-    else:
-        data = [(key, formatter(value)) for key, value in key_values]
-
-    # use the terminaltables.AsciiTable to format our key values
-    table = AsciiTable(data)
-    table.padding_left = 0
-    table.padding_right = 3
-    table.inner_column_border = False
-    table.inner_footing_row_border = False
-    table.inner_heading_row_border = False
-    table.inner_row_border = False
-    table.outer_border = False
-    lines = [line.rstrip() for line in table.table.split('\n')]
-
-    # prepend a title
-    if title is not None:
-        max_length = max(max(map(len, lines)), len(title))
-        delim = delimiter_char * max_length
-        lines = [title, delim] + lines
-
-    return '\n'.join(lines)

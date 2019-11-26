@@ -1,4 +1,5 @@
 import os
+import re
 import unittest
 from tempfile import TemporaryDirectory
 
@@ -234,3 +235,19 @@ class InheritanceDictTestCase(unittest.TestCase):
             _ = d[NotExist]
         with pytest.raises(KeyError):
             _ = d[NotExist]
+
+
+class DeepCopyTestCase(unittest.TestCase):
+
+    def test_deep_copy(self):
+        # test regex
+        pattern = re.compile(r'xyz')
+        self.assertIs(deep_copy(pattern), pattern)
+
+        # test list of regex
+        v = [pattern, pattern]
+        o = deep_copy(v)
+        self.assertIsNot(v, o)
+        self.assertEqual(v, o)
+        self.assertIs(v[0], o[0])
+        self.assertIs(o[1], o[0])

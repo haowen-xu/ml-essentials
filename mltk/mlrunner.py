@@ -24,12 +24,12 @@ from urllib.parse import urlsplit, urlunsplit, SplitResult
 
 import click
 
-from .config import Config, ConfigLoader, deep_copy, format_key_values
+from .config import Config, ConfigLoader, field_checker, validate_config
 from .events import EventHost, Event
 from .mlstorage import (DocumentType, MLStorageClient, IdType,
                         normalize_relpath)
 from .output_parser import *
-from .utils import exec_proc, json_loads, parse_tags
+from .utils import exec_proc, json_loads, parse_tags, deep_copy
 
 __all__ = ['MLRunnerConfig', 'MLRunner']
 
@@ -37,6 +37,7 @@ LOG_LEVEL = 'INFO'
 LOG_FORMAT = '%(asctime)s [%(levelname)-8s] %(message)s'
 
 PatternType = getattr(typing, 'Pattern', getattr(re, 'Pattern', Any))
+CommandOrArgsType = Union[List[str], Tuple[str, ...], str]
 
 
 class MLRunnerConfig(Config):
@@ -50,7 +51,7 @@ class MLRunnerConfig(Config):
     >>> config.gpu = ['1', '2']
     >>> config.daemon = ['echo "hello"', ['python', '-m', 'http.server']]
 
-    >>> config = config.validate()
+    >>> config = validate_config(config)
     >>> config.server
     'http://127.0.0.1:8080'
     >>> config.args
@@ -58,26 +59,33 @@ class MLRunnerConfig(Config):
     >>> config.tags
     ['hello', '123']
     >>> config.env
-    Config(THE_VAR='456')
+    {'THE_VAR': '456'}
     >>> config.gpu
     [1, 2]
     >>> config.daemon
     ['echo "hello"', ['python', '-m', 'http.server']]
     """
 
-    server: str = None
-    parent_id: str = None
-    name: str = None
-    description: str = None
-    tags: List[str] = None
-    resume_from: str = None
-    clone_from: str = None
+    server: str
+    parent_id: Optional[str]
+    name: Optional[str]
+    description: Optional[str]
+    tags: Optional[List[str]]
+    resume_from: Optional[str]
+    clone_from: Optional[str]
 
-    args: Union[str, List[str]] = None
-    daemon: List[List[str]] = None
-    work_dir: str = None
-    env: Config = None
-    gpu: List[int] = None
+    args: CommandOrArgsType
+
+    @field_checker('args')
+    def _args_validator(self, v, values, field):
+        if not v:
+            raise ValueError('\'args\' must not be empty.')
+        return v
+
+    daemon: Optional[List[CommandOrArgsType]]
+    work_dir: Optional[str]
+    env: Optional[Dict[str, str]]
+    gpu: Optional[List[int]]
 
     quiet: bool = False
     ctrl_c_timeout: int = 3
@@ -85,10 +93,10 @@ class MLRunnerConfig(Config):
     class source(Config):
         src_dir: str = '.'
         dst_dir: str = ''
-        includes = [
+        includes: List[PatternType] = [
             re.compile(r'.*\.(py|pl|rb|js|sh|r|bat|cmd|exe|jar)$')
         ]
-        excludes = [
+        excludes: List[PatternType] = [
             re.compile(
                 r'.*[\\/](node_modules|\.svn|\.cvs|\.idea|'
                 r'\.DS_Store|\.git|\.hg|\.pytest_cache|__pycache__)'
@@ -102,21 +110,17 @@ class MLRunnerConfig(Config):
         make_archive: bool = True
         archive_name: str = 'source.zip'
 
-        def user_validate(self):
+        @field_checker('includes', 'excludes', pre=True)
+        def _validate_includes_and_excludes(cls, v, values, field):
             def maybe_compile(p):
                 if not hasattr(p, 'match'):
                     p = re.compile(p)
                 return p
-
-            if self.includes:
-                if not isinstance(self.includes, (list, tuple)):
-                    self.includes = [self.includes]
-                self.includes = [maybe_compile(p) for p in self.includes]
-
-            if self.excludes:
-                if not isinstance(self.excludes, (list, tuple)):
-                    self.excludes = [self.excludes]
-                self.excludes = [maybe_compile(p) for p in self.excludes]
+            if v is None:
+                v = []
+            elif not isinstance(v, (list, tuple)):
+                v = [v]
+            return list(map(maybe_compile, v))
 
     class integration(Config):
         parse_stdout: bool = True
@@ -134,50 +138,6 @@ class MLRunnerConfig(Config):
         log_file: str = 'console.log'
         daemon_log_file: str = 'daemon.log'
         runner_log_file: str = 'mlrun.log'
-
-    def user_validate(self):
-        if self.server is None:
-            raise ValueError('`server` is required.')
-
-        if self.args is None:
-            raise ValueError('`args` is required.')
-        elif not isinstance(self.args, (str, bytes)):
-            self.args = list(map(str, self.args))
-        else:
-            self.args = str(self.args)
-
-        if not self.args:
-            raise ValueError('`args` cannot be empty.')
-
-        if self.tags is not None:
-            if not isinstance(self.tags, (list, tuple)):
-                self.tags = [self.tags]
-            self.tags = list(map(str, self.tags))
-
-        if self.env is not None:
-            self.env = Config(**{
-                key: str(value)
-                for key, value in self.env.to_dict().items()
-            })
-
-        if self.gpu is not None:
-            if not isinstance(self.gpu, (list, tuple)):
-                self.gpu = [self.gpu]
-            self.gpu = list(map(int, self.gpu))
-
-        if self.daemon is not None:
-            if not isinstance(self.daemon, (list, tuple)):
-                raise ValueError(f'`daemon` must be a sequence: '
-                                 f'got {self.daemon!r}.')
-
-            daemon = []
-            for d in self.daemon:
-                if not isinstance(d, (list, tuple)):
-                    d = str(d)
-                else:
-                    d = list(map(str, d))
-                daemon.append(d)
-            self.daemon = daemon
 
 
 class MLRunner(object):
@@ -243,7 +203,7 @@ class MLRunner(object):
             'MLSTORAGE_OUTPUT_DIR': output_dir,
         })
         if self.config.env is not None:
-            update_env(env, self.config.env.to_flatten_dict())
+            update_env(env, self.config.env)
 
         # set "CUDA_VISIBLE_DEVICES" according to gpu settings
         if self.config.gpu:
@@ -776,6 +736,9 @@ def mlrun(config_file, name, description, tags, env, gpu, work_dir, server,
                 tags.append(t)
 
     # parse the CLI arguments
+    if args is not None:
+        args = list(args)
+
     if env:
         env_dict = {}
         for e in env:
@@ -902,7 +865,7 @@ class MLRunnerConfigLoader(ConfigLoader[MLRunnerConfig]):
         system_paths = tuple(map(os.path.abspath, system_paths))
         file_names = tuple(map(str, file_names))
 
-        super().__init__(config, validate_all=True)
+        super().__init__(config)
         self._user_config_files = config_files
         self._work_dir = work_dir
         self._system_paths = system_paths
