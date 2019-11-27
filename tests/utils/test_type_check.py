@@ -1,9 +1,11 @@
 import copy
 import os
+import re
 import unittest
 from dataclasses import dataclass, field
 from enum import Enum
 from functools import partial
+from pathlib import Path
 from typing import *
 
 import pytest
@@ -216,6 +218,9 @@ class TypeInfoTestCase(unittest.TestCase):
         assert_equal(type_info(bytes), BytesTypeInfo())
         assert_equal(type_info(None), NoneTypeInfo())
         assert_equal(type_info(type(None)), NoneTypeInfo())
+        assert_equal(type_info(PatternType), PatternTypeInfo())
+        assert_equal(type_info_from_value(re.compile('.*')), PatternTypeInfo())
+        assert_equal(type_info(Path), PathTypeInfo())
 
         # enum
         class MyEnum(str, Enum):
@@ -343,7 +348,7 @@ class TypeInfoTestCase(unittest.TestCase):
 
     def test_singleton(self):
         for t in (bool, int, float, str, bytes,
-                  None, Any):
+                  None, Any, PatternType, Path):
             self.assertIs(type_info(t), type_info(t))
 
     def _check_cast(self, ti, expected, strict_inputs, loose_inputs,
@@ -417,6 +422,34 @@ class TypeInfoTestCase(unittest.TestCase):
         ti = type_info(bytes)
         self.assertEqual(str(ti), 'bytes')
         self._check_cast(ti, b'123', [b'123'], ['123'], [object()])
+
+    def test_pattern_type(self):
+        ti = type_info(PatternType)
+        self.assertEqual(str(ti), 'PatternType')
+        self._check_cast(
+            ti,
+            re.compile(b'[xyz]'),
+            [re.compile(b'[xyz]')],
+            [b'[xyz]', {'regex': b'[xyz]'}],
+            [object(), b'[xyz']
+        )
+        self._check_cast(
+            ti,
+            re.compile('[xyz]', re.I),
+            [re.compile('[xyz]', re.I)],
+            [{'regex': '[xyz]', 'flags': 'i'}]
+        )
+        # the following sentence checks whether or not the pattern string
+        # is parsed by the PatternTypeInfo directly without being parsed
+        # by YAML decoder.
+        self.assertEqual(ti.parse_string('[xyz]'), re.compile('[xyz]'))
+        with pytest.raises(TypeCheckError, match='Unknown regex flag: \'x\''):
+            _ = ti.check_value({'regex': '.*', 'flags': 'x'})
+
+    def test_path(self):
+        ti = type_info(Path)
+        self.assertEqual(str(ti), 'Path')
+        self._check_cast(ti, Path('.'), [Path('.')], ['.'], [object()])
 
     def test_none(self):
         ti = type_info(None)

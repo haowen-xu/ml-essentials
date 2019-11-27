@@ -12,7 +12,6 @@ import subprocess
 import sys
 import time
 import traceback
-import typing
 import zipfile
 from contextlib import contextmanager, ExitStack
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -29,14 +28,13 @@ from .events import EventHost, Event
 from .mlstorage import (DocumentType, MLStorageClient, IdType,
                         normalize_relpath)
 from .output_parser import *
-from .utils import exec_proc, json_loads, parse_tags, deep_copy
+from .utils import exec_proc, json_loads, parse_tags, deep_copy, PatternType
 
 __all__ = ['MLRunnerConfig', 'MLRunner']
 
 LOG_LEVEL = 'INFO'
 LOG_FORMAT = '%(asctime)s [%(levelname)-8s] %(message)s'
 
-PatternType = getattr(typing, 'Pattern', getattr(re, 'Pattern', Any))
 CommandOrArgsType = Union[List[str], Tuple[str, ...], str]
 
 
@@ -112,15 +110,10 @@ class MLRunnerConfig(Config):
 
         @field_checker('includes', 'excludes', pre=True)
         def _validate_includes_and_excludes(cls, v, values, field):
-            def maybe_compile(p):
-                if not hasattr(p, 'match'):
-                    p = re.compile(p)
-                return p
-            if v is None:
-                v = []
-            elif not isinstance(v, (list, tuple)):
+            # wrap one direct pattern into a list containing this pattern
+            if isinstance(v, (str, bytes, PatternType)):
                 v = [v]
-            return list(map(maybe_compile, v))
+            return v
 
     class integration(Config):
         parse_stdout: bool = True

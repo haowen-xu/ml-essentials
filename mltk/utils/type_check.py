@@ -2,15 +2,17 @@ import copy
 import dataclasses
 import inspect
 import os
+import re
 from contextlib import contextmanager
 from dataclasses import dataclass, is_dataclass
 from enum import Enum
+from pathlib import Path
 from typing import *
 
 import numpy as np
 import yaml
 
-from .misc import NOT_SET, Singleton, deep_copy
+from .misc import NOT_SET, Singleton, deep_copy, PatternType
 
 __all__ = [
     'TypeCheckError', 'TypeCheckContext',
@@ -22,8 +24,9 @@ __all__ = [
     # various type info classes
     'AnyTypeInfo',
     'IntTypeInfo', 'FloatTypeInfo', 'BoolTypeInfo', 'StrTypeInfo',
-    'BytesTypeInfo', 'NoneTypeInfo', 'EnumTypeInfo',
-    'OptionalTypeInfo', 'UnionTypeInfo', 'ListTypeInfo', 'TupleTypeInfo',
+    'BytesTypeInfo', 'PatternTypeInfo', 'PathTypeInfo',
+    'NoneTypeInfo', 'EnumTypeInfo', 'OptionalTypeInfo', 'UnionTypeInfo',
+    'ListTypeInfo', 'TupleTypeInfo',
     'VardicTupleTypeInfo', 'DictTypeInfo',
 ]
 
@@ -226,6 +229,10 @@ def type_info(type_) -> 'TypeInfo':
             return StrTypeInfo()
         elif issubclass(type_, bytes):
             return BytesTypeInfo()
+        elif issubclass(type_, PatternType):
+            return PatternTypeInfo()
+        elif issubclass(type_, Path):
+            return PathTypeInfo()
         elif is_dataclass(type_):
             type_fields = getattr(type_, dataclasses._FIELDS)
             fields = {}
@@ -365,6 +372,12 @@ class PrimitiveTypeInfo(TypeInfo[TObject], Singleton):
     def _parse_string(self, s: str, context: TypeCheckContext) -> TObject:
         with context.scoped_set_strict(False):
             return self._check_value(s, context)
+
+    def __eq__(self, other):
+        return isinstance(other, self.__class__)
+
+    def __hash__(self):
+        return hash(self.__class__)
 
 
 class IntTypeInfo(PrimitiveTypeInfo[int]):
@@ -509,6 +522,80 @@ class BytesTypeInfo(PrimitiveTypeInfo[bytes]):
 
     def __str__(self):
         return 'bytes'
+
+
+class PatternTypeInfo(PrimitiveTypeInfo[PatternType]):
+    """
+    Type information of ``re.Pattern``.
+
+    >>> t = type_info(PatternType)
+    >>> t
+    <TypeInfo(PatternType)>
+    >>> t.check_value('.*')
+    re.compile('.*')
+    >>> t.check_value(b'.*')
+    re.compile(b'.*')
+    >>> t.check_value({'regex': '.*', 'flags': 'i'})
+    re.compile('.*', re.IGNORECASE)
+    >>> t.parse_string('[xyz]')
+    re.compile('[xyz]')
+    """
+
+    CHARS_TO_FLAGS = {
+        'i': re.IGNORECASE,
+        'm': re.MULTILINE,
+        's': re.DOTALL,
+    }
+
+    def _check_value(self, o: Any, context: TypeCheckContext) -> PatternType:
+        if not context.strict:
+            if isinstance(o, (str, bytes)):
+                o = re.compile(o)
+            elif hasattr(o, '__contains__') and hasattr(o, '__getitem__') and \
+                    'regex' in o:
+                flags_str = str(o.get('flags', ''))
+                flags = 0
+                for c in flags_str:
+                    if c not in self.CHARS_TO_FLAGS:
+                        context.raise_error(f'Unknown regex flag: {c!r}')
+                    flags |= self.CHARS_TO_FLAGS[c]
+                o = re.compile(o['regex'], flags)
+            elif not isinstance(o, PatternType):
+                context.raise_error('value cannot be casted into a regex '
+                                    'pattern')
+        if not isinstance(o, PatternType):
+            context.raise_error('value is not a regex pattern.')
+        return o
+
+    def __str__(self):
+        return 'PatternType'
+
+
+class PathTypeInfo(PrimitiveTypeInfo[Path]):
+    """
+    Type information of ``pathlib.Path``.
+
+    >>> t = type_info(Path)
+    >>> t
+    <TypeInfo(Path)>
+    >>> t.check_value('.') == Path('.')
+    True
+    >>> t.check_value(Path('.')) == Path('.')
+    True
+    >>> t.parse_string('.') == Path('.')
+    True
+    """
+
+    def _check_value(self, o: Any, context: TypeCheckContext) -> Path:
+        if not context.strict:
+            if not isinstance(o, Path):
+                o = Path(o)
+        if not isinstance(o, Path):
+            context.raise_error('value is not a Path')
+        return o
+
+    def __str__(self):
+        return 'Path'
 
 
 class NoneTypeInfo(TypeInfo[None], Singleton):
@@ -1192,9 +1279,12 @@ class ObjectTypeInfo(TypeInfo[TObject]):
                 for field_name in checker.fields:
                     if field_name == '*':
                         for k in field_names:
-                            kv[k] = checker(kv[k], kv, k)
+                            with context.enter(k):
+                                kv[k] = checker(kv[k], kv, k)
                     if field_name in kv:
-                        kv[field_name] = checker(kv[field_name], kv, field_name)
+                        with context.enter(field_name):
+                            kv[field_name] = checker(
+                                kv[field_name], kv, field_name)
 
         # check the fields by registered checkers
         for field_name, field_info in self.fields.items():
@@ -1269,12 +1359,18 @@ class ObjectTypeInfo(TypeInfo[TObject]):
                 for field_name in checker.fields:
                     if field_name == '*':
                         for k in field_names:
-                            object_set(o, k, checker(object_get(o, k), o, k))
+                            with context.enter(k):
+                                object_set(
+                                    o,
+                                    k,
+                                    checker(object_get(o, k), o, k)
+                                )
                     elif object_contains(o, field_name):
-                        object_set(
-                            o,
-                            field_name,
-                            checker(object_get(o, field_name), o, field_name)
-                        )
+                        with context.enter(field_name):
+                            object_set(
+                                o,
+                                field_name,
+                                checker(object_get(o, field_name), o, field_name)
+                            )
 
         return o

@@ -9,6 +9,7 @@ import numpy as np
 from heapdict import heapdict
 
 __all__ = [
+    'PatternType',
     'Singleton', 'NOT_SET',
     'format_duration', 'ETA', 'minibatch_slices_iterator',
     'optional_apply',  'validate_enum_arg',
@@ -16,6 +17,8 @@ __all__ = [
     'InheritanceDict', 'CachedInheritanceDict',
     'parse_tags', 'deep_copy',
 ]
+
+PatternType = type(re.compile('x'))
 
 
 class Singleton(object):
@@ -524,7 +527,6 @@ def parse_tags(s: str) -> List[str]:
 
 
 TValue = TypeVar('TValue')
-PatternType = type(re.compile('x'))
 
 
 def deep_copy(value: TValue) -> TValue:
