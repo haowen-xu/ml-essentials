@@ -13,7 +13,7 @@ import yaml
 from .utils import *
 
 __all__ = [
-    'ConfigValidationError',
+    'ConfigValidationError', 'PatternType',
     'field_checker', 'root_checker', 'config_field', 'ConfigField',
     'config_params', 'get_config_params', 'ConfigMeta',
     'Config', 'validate_config', 'config_to_dict', 'config_defaults',
