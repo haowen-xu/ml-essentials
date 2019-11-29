@@ -17,10 +17,10 @@ from bson import ObjectId
 from click.testing import CliRunner
 from mock import Mock
 
-from mltk import ConfigValidationError, MLStorageClient, validate_config
-from mltk.mlrunner import (ProgramHost, StdoutParser, MLRunnerConfig,
-                           SourceCopier, MLRunnerConfigLoader,
-                           TemporaryFileCleaner, JsonFileWatcher, ExperimentDoc,
+from mltk import ConfigValidationError, MLStorageClient, validate_config, ProgramOutputReceiver
+from mltk.mlrunner import (ProgramHost, MLRunnerConfig, SourceCopier,
+                           MLRunnerConfigLoader, TemporaryFileCleaner,
+                           JsonFileWatcher, ExperimentDoc,
                            MLRunner, mlrun, ControlServer)
 from mltk.utils import json_dumps, json_loads
 from tests.helpers import *
@@ -377,7 +377,7 @@ class MLRunnerTestCase(unittest.TestCase):
                         'python',
                         '-c',
                         'print("hello")\n'
-                        'print("[Epoch 2/5, Step 3, ETA 5s] epoch_time: 1s; loss: 0.25 (±0.1); span: 5")\n'
+                        'print("[Epoch 2/5, Batch 3/6, Step 4, ETA 5s] epoch_time: 1s; loss: 0.25 (±0.1); span: 5")\n'
                         'open("config.json", "wb").write(b"{\\"max_epoch\\": 123}\\n")\n'
                         'open("config.defaults.json", "wb").write(b"{\\"max_epoch\\": 100}\\n")\n'
                         'open("webui.json", "wb").write(b"{\\"TB\\": \\"http://tb:7890\\"}\\n")\n'
@@ -438,7 +438,7 @@ class MLRunnerTestCase(unittest.TestCase):
                     'storage_dir': os.path.join(
                         temp_dir, f'output/{doc["_id"]}'),
                     'args': config.args,
-                    'progress': {'epoch': '2/5', 'step': 3, 'eta': '5s'},
+                    'progress': {'epoch': '2/5', 'batch': '3/6', 'step': 4, 'eta': '5s'},
                     'result': {'acc': 0.99, 'span': '5', 'loss': '0.25 (±0.1)'},
                     'exit_code': code,
                     'storage_size': size,
@@ -465,8 +465,9 @@ class MLRunnerTestCase(unittest.TestCase):
                                  b'{"max_epoch": 123}\n')
                 self.assertEqual(output_snapshot['console.log'],
                                  b'hello\n'
-                                 b'[Epoch 2/5, Step 3, ETA 5s] epoch_time: 1s; '
-                                 b'loss: 0.25 (\xc2\xb10.1); span: 5\n')
+                                 b'[Epoch 2/5, Batch 3/6, Step 4, ETA 5s] '
+                                 b'epoch_time: 1s; loss: 0.25 (\xc2\xb10.1); '
+                                 b'span: 5\n')
                 self.assertEqual(output_snapshot['result.json'],
                                  b'{"acc": 0.99}\n')
                 self.assertEqual(output_snapshot['webui.json'],
@@ -920,11 +921,19 @@ class ProgramHostTestCase(unittest.TestCase):
                     os.close(stdout_fd2)
 
         # test log parser
-        class MyParser(StdoutParser):
-            def parse(self, content: bytes):
-                logs.append(content)
+        class MyParser(ProgramOutputReceiver):
+            def __init__(self):
+                super().__init__([])
 
-            def flush(self):
+            def start(self):
+                super().start()
+                logs.append('start')
+
+            def put_output(self, data: bytes):
+                logs.append(data)
+
+            def stop(self):
+                super().stop()
                 logs.append('flush')
 
         logs = []
@@ -937,19 +946,27 @@ class ProgramHostTestCase(unittest.TestCase):
                 r'time.sleep(0.1); '
                 r'sys.stdout.write("world\n")'
             ],
-            log_parser=MyParser()
+            log_receiver=MyParser()
         )
         self.assertEqual(code, 0)
         self.assertEqual(output, b'hello\nworld\n')
-        self.assertListEqual(logs, [b'hello\n', b'world\n', 'flush'])
+        self.assertListEqual(logs, ['start', b'hello\n', b'world\n', 'flush'])
 
         # test log parser with error
-        class MyParser(StdoutParser):
-            def parse(self, content: bytes):
+        class MyParser(ProgramOutputReceiver):
+            def __init__(self):
+                super().__init__([])
+
+            def start(self):
+                super().start()
+                logs.append('start')
+
+            def put_output(self, content: bytes):
                 logs.append(content)
                 raise RuntimeError('some error occurred')
 
-            def flush(self):
+            def stop(self):
+                super().stop()
                 logs.append('flush')
                 raise RuntimeError('some error occurred')
 
@@ -963,11 +980,11 @@ class ProgramHostTestCase(unittest.TestCase):
                 r'time.sleep(0.1); '
                 r'sys.stdout.write("world\n")'
             ],
-            log_parser=MyParser()
+            log_receiver=MyParser()
         )
         self.assertEqual(code, 0)
         self.assertEqual(output, b'hello\nworld\n')
-        self.assertListEqual(logs, [b'hello\n', b'world\n', 'flush'])
+        self.assertListEqual(logs, ['start', b'hello\n', b'world\n', 'flush'])
 
         # test log file
         with TemporaryDirectory() as temp_dir:

@@ -235,6 +235,7 @@ class MetricLogger(object):
 
     >>> logger = MetricLogger()
     >>> logger.on_metrics_collected.do(lambda d: print('callback', d))
+    <function <lambda> at ...>
     >>> logger.collect({'train_loss': 5}, train_acc=90)
     callback {'train_loss': 5, 'train_acc': 90}
     """
@@ -339,6 +340,7 @@ class MetricLogger(object):
 
         >>> logger = MetricLogger()
         >>> logger.on_metrics_collected.do(lambda d: print('callback', d))
+        <function <lambda> at ...>
         >>> logger.collect(train_loss=5)
         callback {'train_loss': 5}
         >>> logger.collect()

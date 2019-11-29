@@ -21,16 +21,15 @@ class Event(object):
 
     def __call__(self, method: TCallback):
         """
-        Register `method` as callback to this event.
+        Decorate `method` to register it as a callback of this event.
 
         Args:
             method: The callback method.
 
         Returns:
-            The specified `method`.
+            The given `method`.
         """
-        self.do(method)
-        return method
+        return self.do(method)
 
     def do(self, callback: TCallback):
         """
@@ -40,6 +39,7 @@ class Event(object):
             callback: Callback to register.
         """
         self._callbacks.append(callback)
+        return callback
 
     def undo(self, callback: TCallback):
         """
@@ -101,6 +101,7 @@ class EventHost(object):
     >>> on_updated
     Event(updated)
     >>> on_updated.do(print_args)
+    <function print_args at ...>
     >>> on_updated.fire(123, second=456)
     (123,) {'second': 456}
     """

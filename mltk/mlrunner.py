@@ -27,7 +27,7 @@ from .config import Config, ConfigLoader, field_checker, validate_config
 from .events import EventHost, Event
 from .mlstorage import (DocumentType, MLStorageClient, IdType,
                         normalize_relpath)
-from .output_parser import *
+from .parsing import *
 from .utils import exec_proc, json_loads, parse_tags, deep_copy, PatternType
 
 __all__ = ['MLRunnerConfig', 'MLRunner']
@@ -117,11 +117,7 @@ class MLRunnerConfig(Config):
 
     class integration(Config):
         parse_stdout: bool = True
-
-        class stdout_pattern(Config):
-            mltk: Optional[str] = None
-            mltk_metric: Optional[str] = None
-
+        webui_patterns: Optional[List[PatternType]] = None
         config_file: str = 'config.json'
         default_config_file: str = 'config.defaults.json'
         result_file: str = 'result.json'
@@ -243,14 +239,20 @@ class MLRunner(object):
                     count += f_count
             return size, count
 
-    def _on_mltk_log(self, status: ProgramProgress):
+    def _on_program_output_info_received(self, info: ProgramInfo):
+        if isinstance(info, ProgramTrainInfo):
+            return self._on_train_info_received(info)
+        if isinstance(info, ProgramWebUIInfo):
+            return self._on_webui_info_received(info)
+
+    def _on_train_info_received(self, info: ProgramTrainInfo):
         updates = {}
 
         # assemble the metrics
-        if status.metrics:
+        if info.metrics:
             metrics = {
                 k: (f'{v.mean} (±{v.std})' if v.std is not None else v.mean)
-                for k, v in status.metrics.items()
+                for k, v in info.metrics.items()
                 if k.rsplit('_', 1)[-1] != 'time'
             }
             if metrics:
@@ -258,16 +260,20 @@ class MLRunner(object):
 
         # assemble the progress
         progress = {}
-        for name in ('epoch', 'step'):
-            v = getattr(status, name)
-            max_v = getattr(status, f'max_{name}')
+        for name, max_name in [('epoch', 'total_epochs'),
+                               ('batch', 'total_batches'),
+                               ('step', 'total_steps')]:
+            v = getattr(info, name)
+            max_v = getattr(info, max_name)
             if v is not None:
                 if max_v is not None:
                     progress[name] = f'{v}/{max_v}'
                 else:
                     progress[name] = v
-        if status.eta:
-            progress['eta'] = status.eta
+        if info.eta:
+            progress['eta'] = info.eta
+        if info.epoch_eta:  # pragma: no cover
+            progress['epoch_eta'] = info.epoch_eta
 
         if progress:
             updates['progress'] = progress
@@ -275,9 +281,9 @@ class MLRunner(object):
         if updates:
             self.doc.update(updates)
 
-    def _on_webui_log(self, status: ProgramWebUI):
-        name = status.name
-        uri = status.uri
+    def _on_webui_info_received(self, info: ProgramWebUIInfo):
+        name = info.name
+        uri = info.uri
         try:
             u = urlsplit(uri)
         except Exception as ex:  # pragma: no cover
@@ -294,15 +300,16 @@ class MLRunner(object):
                     uri = urlunsplit(u)
         self.doc.update({'webui': {name: uri}})
 
-    def _create_log_parser(self):
-        stdout_pattern = self.config.integration.stdout_pattern
-        parser = StdoutParser(
-            mltk_pattern=stdout_pattern.mltk or None,
-            mltk_metric_pattern=stdout_pattern.mltk_metric or None,
+    def _create_log_receiver(self):
+        webui_patterns = self.config.integration.webui_patterns
+        log_receiver = ProgramOutputReceiver(
+            parsers=[
+                MLTKTrainInfoOutputParser(),
+                GeneralWebUIOutputParser(patterns=webui_patterns),
+            ]
         )
-        parser.on_mltk_log.do(self._on_mltk_log)
-        parser.on_webui_log.do(self._on_webui_log)
-        return parser
+        log_receiver.on_program_info.do(self._on_program_output_info_received)
+        return log_receiver
 
     def _on_json_updated(self, name, content):
         if name == self.config.integration.result_file:
@@ -344,7 +351,7 @@ class MLRunner(object):
             env=env,
             work_dir=work_dir,
             log_to_stdout=not self.config.quiet,
-            log_parser=self._create_log_parser(),
+            log_receiver=self._create_log_receiver(),
             log_file=log_file,
             append_to_file=True,
             ctrl_c_timeout=self.config.ctrl_c_timeout,
@@ -361,7 +368,7 @@ class MLRunner(object):
                     env=env,
                     work_dir=work_dir,
                     log_to_stdout=False,
-                    log_parser=self._create_log_parser(),
+                    log_receiver=self._create_log_receiver(),
                     log_file=log_file,
                     append_to_file=True,
                 ))
@@ -919,112 +926,6 @@ class MLRunnerConfigLoader(ConfigLoader[MLRunnerConfig]):
             self.load_file(config_file)
 
 
-class StdoutParser(object):
-    """
-    Class to parse the stdout of an experiment program.
-
-    >>> parser = StdoutParser()
-    >>> parser.on_mltk_log.do(print)
-    >>> parser.on_webui_log.do(print)
-
-    Various outputs can be parsed and the corresponding events can be triggered:
-
-    >>> parser.parse('[Epoch 1/10, Step 5, ETA 2h 10s] '
-    ...              'epoch time: 3.2s; step time: 0.1s (±0.02s)\\n'.
-    ...              encode('utf-8'))
-    ProgramProgress(epoch=1, max_epoch=10, step=5, max_step=None, eta='2h 10s', metrics={'epoch_time': ProgramMetric(mean='3.2s', std=None), 'step_time': ProgramMetric(mean='0.1s', std='0.02s')})
-
-    >>> parser.parse(b'TensorBoard 1.13.1 at http://127.0.0.1:62462 '
-    ...              b'(Press CTRL+C to quit)\\n')
-    ProgramWebUI(name='TensorBoard', uri='http://127.0.0.1:62462')
-    >>> parser.parse(b'Serving HTTP on 0.0.0.0 port 8000 '
-    ...              b'(http://0.0.0.0:8000/) ...\\n')
-    ProgramWebUI(name='SimpleHTTP', uri='http://0.0.0.0:8000/')
-
-    >>> parser.parse(b'no pattern exist\\n')
-
-    Too long output lines will not be parsed, for example:
-
-    >>> parser.parse(b'[Epoch 1/10, Step 5] \\n')
-    ProgramProgress(epoch=1, max_epoch=10, step=5, max_step=None, eta=None, metrics={})
-    >>> parser.parse(b'[Epoch 1/10, Step 5]' + b' ' * 2048 + b'\\n')
-    """
-
-    def __init__(self,
-                 max_parse_length: int = 2048,
-                 mltk_pattern: Optional[str] = None,
-                 mltk_metric_pattern: Optional[str] = None):
-        """
-        Construct a new :class:`StdoutParser`.
-
-        Args:
-            max_parse_length: The maximum length of line to parse.
-            mltk_pattern: The regex pattern for the overall MLTK logs.
-            mltk_metric_pattern: The regex pattern for the metrics in MLTK logs.
-        """
-        self._events = EventHost()
-        self._on_mltk_log = self.events['on_mltk_log']
-        self._on_webui_log = self.events['on_webui_log']
-
-        self._output_sink = ProgramOutputSink(
-            parsers=[
-                ProgramProgressParser(
-                    line_pattern=mltk_pattern,
-                    metric_pattern=mltk_metric_pattern,
-                ),
-                ProgramWebUIParser(),
-            ],
-            max_parse_length=max_parse_length,
-        )
-
-    @property
-    def events(self) -> EventHost:
-        """Get the event host."""
-        return self._events
-
-    @property
-    def on_mltk_log(self) -> Event:
-        """
-        The event that an MLTK log has been received.
-
-        Callback function type: `(progress: dict, metrics: dict) -> None`
-        """
-        return self._on_mltk_log
-
-    @property
-    def on_webui_log(self) -> Event:
-        """
-        The event that a Web UI has been created.
-
-        Callback function type: `(info: dict) -> None`,
-        where the structure of `info` is: `{'<name>': '<uri>'}`.
-        """
-        return self._on_webui_log
-
-    def _dispatch_status(self, status: ProgramStatus):
-        if isinstance(status, ProgramProgress):
-            self.on_mltk_log.fire(status)
-        elif isinstance(status, ProgramWebUI):
-            self.on_webui_log.fire(status)
-
-    def parse(self, content: bytes):
-        """
-        Parse the output content.
-
-        Args:
-            content: The output content.
-        """
-        for s in self._output_sink.parse(content):
-            self._dispatch_status(s)
-
-    def flush(self):
-        """
-        Parse the un-parsed content as a complete line.
-        """
-        for s in self._output_sink.flush():
-            self._dispatch_status(s)
-
-
 class ProgramHost(object):
     """
     Class to run a program.
@@ -1035,7 +936,7 @@ class ProgramHost(object):
                  env: Optional[Dict[str, Any]] = None,
                  work_dir: Optional[str] = None,
                  log_to_stdout: bool = True,
-                 log_parser: Optional[StdoutParser] = None,
+                 log_receiver: Optional[ProgramOutputReceiver] = None,
                  log_file: Optional[Union[str, int]] = None,
                  append_to_file: bool = True,
                  ctrl_c_timeout: int = 3):
@@ -1050,7 +951,7 @@ class ProgramHost(object):
             work_dir: The working directory.
             log_to_stdout: Whether or not to write the program outputs to
                 the runner's stdout?
-            log_parser: The log parser, to parse the program outputs.
+            log_receiver: The log receiver, to receive the program outputs.
             log_file: The path or fileno of the log file, where to write the
                 program outputs.
             append_to_file: Whether or not to open the log file in append mode?
@@ -1059,7 +960,7 @@ class ProgramHost(object):
         self._env = env
         self._work_dir = work_dir
         self._log_to_stdout = log_to_stdout
-        self._log_parser = log_parser
+        self._log_receiver = log_receiver
         self._log_file = log_file
         self._append_to_file = append_to_file
         self._ctrl_c_timeout = ctrl_c_timeout
@@ -1107,10 +1008,10 @@ class ProgramHost(object):
             write_to_stdout = None
 
         # prepare for the log parser
-        if self._log_parser is not None:
+        if self._log_receiver is not None:
             def parse_log(cnt):
                 try:
-                    self._log_parser.parse(cnt)
+                    self._log_receiver.put_output(cnt)
                 except Exception as ex:
                     getLogger(__name__).warning(
                         'Error in parsing output of: %s', args, exc_info=True)
@@ -1150,6 +1051,8 @@ class ProgramHost(object):
 
         # run the program
         try:
+            if self._log_receiver:
+                self._log_receiver.start()
             with exec_proc(args=args,
                            on_stdout=on_output,
                            stderr_to_stdout=True,
@@ -1161,9 +1064,9 @@ class ProgramHost(object):
         finally:
             if close_log_file:
                 os.close(log_fileno)
-            if self._log_parser:
+            if self._log_receiver:
                 try:
-                    self._log_parser.flush()
+                    self._log_receiver.stop()
                 except Exception as ex:
                     getLogger(__name__).warning(
                         'Error in parsing output of: %s', args, exc_info=True)

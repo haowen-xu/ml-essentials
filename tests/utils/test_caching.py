@@ -18,10 +18,12 @@ from mltk.utils import *
 
 
 def get_asset_path(name):
-    return os.path.join(
-        os.path.split(os.path.abspath(__file__))[0],
-        'assets',
-        name
+    return os.path.normpath(
+        os.path.join(
+            os.path.split(os.path.abspath(__file__))[0],
+            '../assets/utils',
+            name
+        )
     )
 
 

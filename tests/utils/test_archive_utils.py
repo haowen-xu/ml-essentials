@@ -79,7 +79,7 @@ class ExtractorTestCase(unittest.TestCase):
     def get_asset(self, name):
         return os.path.join(
             os.path.split(os.path.abspath(__file__))[0],
-            'assets',
+            '../assets/utils',
             name
         )
 

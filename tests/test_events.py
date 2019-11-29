@@ -23,8 +23,8 @@ class EventTestCase(unittest.TestCase):
         self.assertIn('ev', events)
 
         # test add callback
-        ev.do(f1)
-        ev.do(f2)
+        self.assertEqual(ev.do(f1), f1)
+        self.assertEqual(ev.do(f2), f2)
 
         # test fire
         ev.fire(123, second=456)
