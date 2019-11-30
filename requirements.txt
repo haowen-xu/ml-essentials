@@ -8,6 +8,7 @@ idx2numpy >= 1.2.2
 numpy >= 1.15.0
 pprint >= 0.1
 PyMongo >= 3.8.0
+pytz >= 2019.3
 PyYAML >= 3.13
 requests >= 2.19.1
 terminaltables >= 3.1.0

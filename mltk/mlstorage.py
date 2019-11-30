@@ -1,4 +1,9 @@
 import re
+import time
+from datetime import datetime
+from logging import getLogger
+
+import pytz
 from cachetools import LRUCache
 from typing import *
 from urllib.parse import quote as urlquote
@@ -6,9 +11,9 @@ from urllib.parse import quote as urlquote
 import requests
 from bson import ObjectId
 
-from .utils import json_dumps, json_loads
+from .utils import json_dumps, json_loads, RemoteDoc, merge_doc_fields, RemoteUpdateMode
 
-__all__ = ['MLStorageClient']
+__all__ = ['MLStorageClient', 'ExperimentRemoteDoc']
 
 DocumentType = FilterType = Dict[str, Any]
 IdType = Union[ObjectId, str]
@@ -290,3 +295,89 @@ class MLStorageClient(object):
         path = normalize_relpath(path)
         return self.do_request(
             'GET', f'/_getfile/{id}/{path}', decode_json=False).content
+
+
+class ExperimentRemoteDoc(RemoteDoc):
+    """:class:`RemoteDoc` class for experiment document."""
+
+    def __init__(self,
+                 client: MLStorageClient,
+                 id: IdType,
+                 enable_heartbeat: bool = True):
+        super().__init__(
+            retry_interval=30,
+            relaxed_interval=5,
+            heartbeat_interval=120 if enable_heartbeat else None,
+            keys_to_expand=('config', 'result', 'webui', 'exc_info'),
+        )
+        self.client: MLStorageClient = client
+        self.id: IdType = id
+        self.enable_heartbeat = enable_heartbeat
+        self.last_response: Optional[DocumentType] = None  # last response from remote
+        self.has_set_finished: bool = False
+
+    def now_time_literal(self) -> str:
+        """
+        Get the current time literal.
+
+        Using this method, we can use `client.update` as a drop-in replacement
+        for the `heartbeat` and `set_finished` API call.
+        """
+        return datetime.utcnow().replace(tzinfo=pytz.UTC).isoformat()
+
+    def push_to_remote(self, updates: DocumentType):
+        if self.enable_heartbeat and 'heartbeat' not in updates:
+            updates['heartbeat'] = self.now_time_literal()
+        self.last_response = self.client.update(self.id, updates)
+
+    def set_finished(self,
+                     status: str,
+                     updates: Optional[DocumentType] = None,
+                     retry_intervals: Sequence[float] = (10, 20, 30, 50, 80,
+                                                         130, 210)):
+        """
+        Set the experiment to be finished.
+
+        Args:
+            status: The finish status, one of ``{"COMPLETED", "FAILED"}``.
+            updates: The other fields to be updated.
+            retry_intervals: The intervals to sleep between two attempts
+                to save the finish status.
+        """
+        if self._thread is not None:
+            raise RuntimeError('`set_finished` must only be called when '
+                               'the background worker is not running.')
+
+        # compose the updates dict
+        if updates is None:
+            updates: DocumentType = {}
+        now_time = self.now_time_literal()
+        updates.setdefault('status', status)
+        updates.setdefault('heartbeat', now_time)
+        updates.setdefault('stop_time', now_time)
+
+        # feed into this remote doc
+        self.update(updates)
+
+        # now call flush to actually push the updates
+        # try to save the final status
+        last_ex: Optional[Exception] = None
+        for itv in (0,) + tuple(retry_intervals):
+            if itv > 0:
+                time.sleep(itv)
+            try:
+                self.flush()
+            except Exception as ex:
+                last_ex = ex
+                getLogger(__name__).warning(
+                    'Failed to store the final status of the experiment %s',
+                    self.id, exc_info=True
+                )
+            else:
+                last_ex = None
+                self.has_set_finished = True
+                break
+
+        # if still failed, raise error
+        if last_ex is not None:
+            raise last_ex

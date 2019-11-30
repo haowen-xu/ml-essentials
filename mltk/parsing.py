@@ -333,9 +333,10 @@ class ProgramOutputReceiver(object):
         This will force the last incomplete line to be processed.
         """
         if self._thread is not None:
+            thread = self._thread
             with self._cond:
                 self._queue.put(self.EOF)
-            self._thread.join()
+            thread.join()
 
     def _parse_line(self, line_start: int, line: bytes):
         for parser in self.parsers:

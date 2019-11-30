@@ -1,13 +1,17 @@
+import time
 import unittest
 import uuid
+from datetime import datetime
 from functools import partial
 
 import httpretty
 import pytest
+import pytz
 import requests
 from bson import ObjectId
+from mock import Mock
 
-from mltk import MLStorageClient
+from mltk import MLStorageClient, ExperimentRemoteDoc
 from mltk.utils import json_dumps, json_loads
 
 
@@ -330,3 +334,109 @@ class MLStorageClientTestCase(unittest.TestCase):
         )
         self.assertEqual(self.client.get_file(object_id, '/./hello.txt'),
                          b'hello, world')
+
+
+class ExperimentRemoteDocTestCase(unittest.TestCase):
+
+    def test_construct(self):
+        client = Mock()
+        id = ObjectId()
+
+        doc = ExperimentRemoteDoc(client, id)
+        self.assertEqual(doc.retry_interval, 30)
+        self.assertEqual(doc.relaxed_interval, 5)
+        self.assertEqual(doc.heartbeat_interval, 120)
+        self.assertEqual(doc.keys_to_expand,
+                         ('config', 'result', 'webui', 'exc_info'))
+        self.assertIs(doc.client, client)
+        self.assertEqual(doc.id, id)
+        self.assertEqual(doc.enable_heartbeat, True)
+        self.assertEqual(doc.last_response, None)
+        self.assertEqual(doc.has_set_finished, False)
+        self.assertIsInstance(doc.now_time_literal(), str)
+
+        doc = ExperimentRemoteDoc(client, id, enable_heartbeat=False)
+        self.assertEqual(doc.enable_heartbeat, False)
+        self.assertEqual(doc.heartbeat_interval, None)
+
+    def test_push_to_remote(self):
+        client = MLStorageClient('http://www.example.com')
+        id = ObjectId()
+        return_value = {'id': id, 'flag': 123}
+        now_time = datetime.utcnow().replace(tzinfo=pytz.UTC).isoformat()
+        client.update = Mock(return_value=return_value)
+
+        # test push_to_remote without heartbeat field
+        push_updates = {'id': id, 'flag': 456}
+        doc = ExperimentRemoteDoc(client, id)
+        doc.now_time_literal = Mock(return_value=now_time)
+        doc.push_to_remote(push_updates)
+        self.assertEqual(doc.last_response, return_value)
+
+        self.assertEqual(client.update.call_args[0][0], id)
+        updates_arg = client.update.call_args[0][1]
+        self.assertIn('heartbeat', updates_arg)
+        updates_arg.pop('heartbeat')
+        self.assertEqual(updates_arg, push_updates)
+
+        # test with heartbeat field
+        now_time2 = datetime.utcnow().replace(tzinfo=pytz.UTC).isoformat()
+        push_updates = {'id': id, 'flag': 456, 'heartbeat': now_time2}
+        doc = ExperimentRemoteDoc(client, id)
+        doc.now_time_literal = Mock(return_value=now_time)
+        doc.push_to_remote(push_updates)
+        self.assertEqual(doc.last_response, return_value)
+        self.assertEqual(client.update.call_args[0][0], id)
+        self.assertEqual(client.update.call_args[0][1], push_updates)
+
+    def test_set_finished(self):
+        client = MLStorageClient('http://www.example.com')
+        id = ObjectId()
+        doc = ExperimentRemoteDoc(client, id)
+        now_time = datetime.utcnow().replace(tzinfo=pytz.UTC).isoformat()
+        doc.now_time_literal = Mock(return_value=now_time)
+
+        # set_finished should only be called when thread is None
+        with doc:
+            with pytest.raises(RuntimeError,
+                               match='`set_finished` must only be called '
+                                     'when the background worker is not '
+                                     'running'):
+                _ = doc.set_finished('FAILED')
+
+        # test error retry
+        start_time = time.time()
+        retry_times = []
+        expected_updates = {
+            'status': 'COMPLETED',
+            'heartbeat': now_time,
+            'stop_time': now_time,
+            'abc': 123,
+        }
+
+        def f(v_id, v_updates):
+            self.assertEqual(v_id, id)
+            self.assertEqual(v_updates, expected_updates)
+            retry_times.append(time.time())
+            raise RuntimeError(f'retry count: {len(retry_times)}')
+
+        client.update = Mock(wraps=f)
+        with pytest.raises(RuntimeError, match='retry count: 3'):
+            doc.set_finished('COMPLETED', {'abc': 123},
+                             retry_intervals=(0.1, 0.2))
+
+        self.assertEqual(len(retry_times), 3)
+        self.assertLess(abs(retry_times[0] - start_time), 0.01)
+        self.assertLess(abs(retry_times[1] - retry_times[0] - 0.1), 0.01)
+        self.assertLess(abs(retry_times[2] - retry_times[1] - 0.2), 0.01)
+        self.assertEqual(doc.has_set_finished, False)
+
+        # test success
+        return_value = {'id': id, 'flags': 456}
+        client.update = Mock(return_value=return_value)
+        doc.set_finished('COMPLETED', {'abc': 123}, retry_intervals=(0.1, 0.2))
+        self.assertEqual(doc.last_response, return_value)
+        self.assertEqual(client.update.call_count, 1)
+        self.assertEqual(client.update.call_args[0][0], id)
+        self.assertEqual(client.update.call_args[0][1], expected_updates)
+        self.assertEqual(doc.has_set_finished, True)

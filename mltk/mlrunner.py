@@ -25,6 +25,7 @@ import click
 
 from .config import Config, ConfigLoader, field_checker, validate_config
 from .events import EventHost, Event
+from .formatting import format_key_values
 from .mlstorage import (DocumentType, MLStorageClient, IdType,
                         normalize_relpath)
 from .parsing import *
