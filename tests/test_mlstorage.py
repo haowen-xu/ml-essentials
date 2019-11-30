@@ -360,7 +360,7 @@ class ExperimentRemoteDocTestCase(unittest.TestCase):
         self.assertEqual(doc.heartbeat_interval, None)
 
     def test_push_to_remote(self):
-        client = MLStorageClient('http://www.example.com')
+        client = MLStorageClient('http://127.0.0.1:8080')
         id = ObjectId()
         return_value = {'id': id, 'flag': 123}
         now_time = datetime.utcnow().replace(tzinfo=pytz.UTC).isoformat()
@@ -390,19 +390,20 @@ class ExperimentRemoteDocTestCase(unittest.TestCase):
         self.assertEqual(client.update.call_args[0][1], push_updates)
 
     def test_set_finished(self):
-        client = MLStorageClient('http://www.example.com')
+        client = MLStorageClient('http://127.0.0.1:8080')
         id = ObjectId()
         doc = ExperimentRemoteDoc(client, id)
         now_time = datetime.utcnow().replace(tzinfo=pytz.UTC).isoformat()
         doc.now_time_literal = Mock(return_value=now_time)
 
         # set_finished should only be called when thread is None
+        client.update = Mock(return_value={})
         with doc:
             with pytest.raises(RuntimeError,
                                match='`set_finished` must only be called '
                                      'when the background worker is not '
                                      'running'):
-                _ = doc.set_finished('FAILED')
+                _ = doc.set_finished('FAILED', retry_intervals=(0.1, 0.2))
 
         # test error retry
         start_time = time.time()

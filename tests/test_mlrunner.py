@@ -20,8 +20,7 @@ from mock import Mock
 from mltk import ConfigValidationError, MLStorageClient, validate_config, ProgramOutputReceiver
 from mltk.mlrunner import (ProgramHost, MLRunnerConfig, SourceCopier,
                            MLRunnerConfigLoader, TemporaryFileCleaner,
-                           JsonFileWatcher, ExperimentDoc,
-                           MLRunner, mlrun, ControlServer)
+                           JsonFileWatcher, MLRunner, mlrun, ControlServer)
 from mltk.utils import json_dumps, json_loads
 from tests.helpers import *
 
@@ -432,6 +431,8 @@ class MLRunnerTestCase(unittest.TestCase):
                 self.assertTrue(control_port['kill'].startswith('http://'))
 
                 hostname = socket.gethostname()
+                stop_time = doc.pop('stop_time')
+                self.assertEqual(doc.pop('heartbeat'), stop_time)
                 self.assertDictEqual(doc, {
                     'name': config.name,
                     '_id': doc["_id"],
@@ -1068,205 +1069,6 @@ class ProgramHostTestCase(unittest.TestCase):
             _ = proc.wait()
             self.assertEqual(get_file_content(log_file), b'kbd interrupt\n')
             self.assertLess(abs(stop_time - start_time - 0.5), 0.1)
-
-
-class ExperimentDocTestCase(unittest.TestCase):
-
-    maxDiff = None
-
-    def test_no_worker(self):
-        object_id = str(ObjectId())
-        client = MLStorageClient('http://127.0.0.1:8080')
-        original_doc = {
-            '_id': object_id,
-            'name': 'the name',
-            'description': 'the description',
-            'config': {'a': 1},
-            'result': {'b': 2},
-        }
-        doc = ExperimentDoc(client, original_doc)
-        self.assertIs(doc.client, client)
-        self.assertEqual(doc.value, original_doc)
-        self.assertEqual(doc.id, object_id)
-        self.assertFalse(doc.has_set_finished)
-
-        # test merge_doc_updates
-        self.assertDictEqual(doc.merge_doc_updates(), original_doc)
-
-        doc.update({'name': 'xyz', 'result': {'bb': 22}})
-        doc.update({'result': {}})
-        doc.update({'webui': {'cc': '33'}, 'config': {'aa': 11}})
-        self.assertDictEqual(doc.updates, {
-            'name': 'xyz', 'result.bb': 22, 'webui.cc': '33',
-            'config.aa': 11
-        })
-        self.assertDictEqual(doc.merge_doc_updates(), {
-            '_id': object_id,
-            'name': 'xyz',
-            'description': 'the description',
-            'config': {'a': 1, 'aa': 11},
-            'result': {'b': 2, 'bb': 22},
-            'webui': {'cc': '33'},
-        })
-
-        # test set_finished
-        merged_doc = {
-            '_id': object_id,
-            'name': 'xyz',
-            'description': 'the description',
-            'config': {'a': 1, 'aa': 11},
-            'result': {'b': 2, 'bb': 22},
-            'webui': {'cc': '33', 'ccc': '333'},
-            'exit_code': 0,
-        }
-
-        def mock_set_finished(id, status, updates):
-            self.assertEqual(id, object_id)
-            self.assertEqual(status, 'COMPLETED')
-            self.assertDictEqual(updates, {
-                'name': 'xyz', 'result.bb': 22, 'webui.cc': '33',
-                'webui.ccc': '333', 'config.aa': 11, 'exit_code': 0
-            })
-            return merged_doc
-
-        client.set_finished = Mock(wraps=mock_set_finished)
-        doc.set_finished('COMPLETED', updates={
-            'exit_code': 0, 'webui': {'ccc': '333'}})
-        self.assertTrue(client.set_finished.called)
-        self.assertDictEqual(doc.value, merged_doc)
-        self.assertIsNone(doc.updates)
-        self.assertTrue(doc.has_set_finished)
-
-        # test set_finished without updates
-        def mock_set_finished(id, status, updates):
-            self.assertEqual(id, object_id)
-            self.assertEqual(status, 'COMPLETED')
-            self.assertIsNone(updates)
-            return merged_doc
-
-        client.set_finished = Mock(wraps=mock_set_finished)
-        doc.set_finished('COMPLETED')
-        self.assertTrue(client.set_finished.called)
-        self.assertDictEqual(doc.value, merged_doc)
-        self.assertIsNone(doc.updates)
-
-        # test set_finished raise error
-        time_logs = []
-
-        def mock_set_finished(id, status, updates):
-            self.assertEqual(id, object_id)
-            self.assertEqual(status, 'COMPLETED')
-            self.assertIsNone(updates)
-            time_logs.append(time.time())
-            raise RuntimeError(f'This is a runtime error: {len(time_logs)}.')
-
-        client.set_finished = Mock(wraps=mock_set_finished)
-        doc._has_set_finished = False
-        with pytest.raises(RuntimeError, match='This is a runtime error: 4'):
-            doc.set_finished('COMPLETED', retry_intervals=(0.1, 0.2, 0.3))
-
-        self.assertEqual(client.set_finished.call_count, 4)
-        self.assertLess(abs(time_logs[1] - time_logs[0] - 0.1), 0.05)
-        self.assertLess(abs(time_logs[2] - time_logs[1] - 0.2), 0.05)
-        self.assertLess(abs(time_logs[3] - time_logs[2] - 0.3), 0.05)
-        self.assertFalse(doc.has_set_finished)
-
-    @slow_test
-    def test_background_worker(self):
-        object_id = str(ObjectId())
-        client = MLStorageClient('http://127.0.0.1:8080')
-        the_doc = {
-            '_id': object_id,
-            'name': 'the name',
-            'description': 'the description',
-            'config': {'a': 1},
-            'result': {'b': 2},
-        }
-        doc = ExperimentDoc(client, the_doc.copy(), heartbeat_interval=0.1)
-
-        # test all success
-        logs = []
-
-        def mock_heartbeat(id):
-            self.assertEqual(id, object_id)
-            logs.append(time.time())
-
-        client.heartbeat = Mock(wraps=mock_heartbeat)
-
-        with doc:
-            def mock_update(id, updates):
-                self.assertEqual(id, object_id)
-                self.assertDictEqual(updates, {
-                    'config.aa': 11,
-                    'result.bb': 22,
-                })
-                the_doc['config'] = {'a': 1, 'aa': 11}
-                the_doc['result'] = {'b': 2, 'bb': 22}
-                return the_doc
-
-            client.update = Mock(wraps=mock_update)
-            doc.update({'config': {'aa': 11}, 'result': {'bb': 22}})
-
-            time.sleep(0.25)
-            self.assertTrue(client.update.called)
-            self.assertDictEqual(doc.value, the_doc)
-            self.assertIsNone(doc.updates)
-
-        self.assertTrue(client.heartbeat.called)
-        self.assertLess(abs(logs[-1] - logs[-2] - 0.1), 0.05)
-
-        # test heartbeat error
-        logs = []
-
-        def mock_heartbeat(id):
-            self.assertEqual(id, object_id)
-            logs.append(time.time())
-            raise RuntimeError('error heartbeat')
-
-        client.heartbeat = Mock(wraps=mock_heartbeat)
-
-        with doc:
-            time.sleep(0.35)
-
-        self.assertGreaterEqual(len(logs), 3)
-        self.assertLessEqual(len(logs), 4)
-
-        # test update error
-        with doc:
-            expected_updates = [
-                (object_id, {
-                    'config.aa': 11,
-                    'result.bb': 22,
-                }),
-                (object_id, {
-                    'config.aa': 11,
-                    'config.aaa': 111,
-                    'result.bb': 22,
-                    'result.bbb': 222,
-                })
-            ]
-            update_logs = []
-
-            def mock_update(id, updates):
-                update_logs.append((id, updates))
-                time.sleep(.15)
-                raise RuntimeError('update error')
-
-            client.update = Mock(wraps=mock_update)
-            doc.update({'config': {'aa': 11}, 'result': {'bb': 22}})
-            time.sleep(.1)
-            doc.update({'config': {'aaa': 111}, 'result': {'bbb': 222}})
-            time.sleep(.25)
-
-            self.assertTrue(client.update.call_count, 2)
-            self.assertListEqual(update_logs, expected_updates)
-
-        self.assertDictEqual(doc.updates, {
-            'config.aa': 11,
-            'config.aaa': 111,
-            'result.bb': 22,
-            'result.bbb': 222,
-        })
 
 
 class SourceCopierTestCase(unittest.TestCase):

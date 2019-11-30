@@ -1,6 +1,5 @@
 # -*- coding: utf-8 -*-
 import codecs
-import copy
 import logging
 import os
 import re
@@ -10,14 +9,13 @@ import socket
 import stat
 import subprocess
 import sys
-import time
 import traceback
 import zipfile
 from contextlib import contextmanager, ExitStack
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from logging import getLogger, FileHandler
 from socketserver import ThreadingMixIn
-from threading import RLock, Condition, Thread
+from threading import Condition, Thread
 from typing import *
 from urllib.parse import urlsplit, urlunsplit, SplitResult
 
@@ -26,10 +24,10 @@ import click
 from .config import Config, ConfigLoader, field_checker, validate_config
 from .events import EventHost, Event
 from .formatting import format_key_values
-from .mlstorage import (DocumentType, MLStorageClient, IdType,
+from .mlstorage import (DocumentType, MLStorageClient, ExperimentRemoteDoc,
                         normalize_relpath)
 from .parsing import *
-from .utils import exec_proc, json_loads, parse_tags, deep_copy, PatternType
+from .utils import exec_proc, json_loads, parse_tags, PatternType
 
 __all__ = ['MLRunnerConfig', 'MLRunner']
 
@@ -148,8 +146,8 @@ class MLRunner(object):
         self._config = config
         self._client = MLStorageClient(config.server)
         self._retry_intervals = tuple(retry_intervals)
-        self._doc = None  # type: ExperimentDoc
-        self._clone_doc = None  # type: DocumentType
+        self._remote_doc: Optional[ExperimentRemoteDoc] = None
+        self._clone_doc: Optional[DocumentType] = None
 
     @property
     def config(self) -> MLRunnerConfig:
@@ -166,9 +164,9 @@ class MLRunner(object):
         return self._retry_intervals
 
     @property
-    def doc(self) -> 'ExperimentDoc':
+    def remote_doc(self) -> Optional['ExperimentRemoteDoc']:
         """Get the experiment document object."""
-        return self._doc
+        return self._remote_doc
 
     def env_dict(self, experiment_id, output_dir, work_dir) -> Dict[str, str]:
         """
@@ -280,7 +278,7 @@ class MLRunner(object):
             updates['progress'] = progress
 
         if updates:
-            self.doc.update(updates)
+            self.remote_doc.update(updates)
 
     def _on_webui_info_received(self, info: ProgramWebUIInfo):
         name = info.name
@@ -299,7 +297,7 @@ class MLRunner(object):
                         path=u.path, query=u.query, fragment=u.fragment
                     )
                     uri = urlunsplit(u)
-        self.doc.update({'webui': {name: uri}})
+        self.remote_doc.update({'webui': {name: uri}})
 
     def _create_log_receiver(self):
         webui_patterns = self.config.integration.webui_patterns
@@ -314,13 +312,13 @@ class MLRunner(object):
 
     def _on_json_updated(self, name, content):
         if name == self.config.integration.result_file:
-            self.doc.update({'result': content})
+            self.remote_doc.update({'result': content})
         elif name == self.config.integration.config_file:
-            self.doc.update({'config': content})
+            self.remote_doc.update({'config': content})
         elif name == self.config.integration.default_config_file:
-            self.doc.update({'default_config': content})
+            self.remote_doc.update({'default_config': content})
         elif name == self.config.integration.webui_file:
-            self.doc.update({'webui': content})
+            self.remote_doc.update({'webui': content})
 
     def _run_proc(self, output_dir):
         # if work_dir is not set, use the MLStorage output_dir (storage_dir).
@@ -331,13 +329,13 @@ class MLRunner(object):
 
         # prepare for the environment variable
         env = self.env_dict(
-            experiment_id=self.doc.id,
+            experiment_id=self.remote_doc.id,
             output_dir=output_dir,
             work_dir=work_dir
         )
 
         # update the doc with execution info
-        self.doc.update({
+        self.remote_doc.update({
             'args': self.config.args,
             'exc_info': {
                 'hostname': socket.gethostname(),
@@ -464,7 +462,7 @@ class MLRunner(object):
                     'Control server started at: %s', control_server.uri)
 
                 # update the doc with execution info
-                self.doc.update({
+                self.remote_doc.update({
                     'exc_info': {
                         'pid': proc.pid,
                     },
@@ -534,8 +532,8 @@ class MLRunner(object):
             with configure_logger(runner_log_file):
                 try:
                     # create the doc object to manage further updates
-                    self._doc = ExperimentDoc(self.client, doc)
-                    self.doc.start_worker()
+                    self._remote_doc = ExperimentRemoteDoc(self.client, doc_id)
+                    self.remote_doc.start_worker()
 
                     try:
                         exit_code = self._run_proc(output_dir)
@@ -546,8 +544,8 @@ class MLRunner(object):
                     final_status = 'FAILED'
                     getLogger(__name__).error(
                         'Failed to run the experiment.', exc_info=True)
-                    self.doc.stop_worker()
-                    self.doc.set_finished(
+                    self.remote_doc.stop_worker()
+                    self.remote_doc.set_finished(
                         final_status,
                         filter_dict({
                             'error': {
@@ -565,8 +563,8 @@ class MLRunner(object):
 
                 else:
                     final_status = 'COMPLETED'
-                    self.doc.stop_worker()
-                    self.doc.set_finished(
+                    self.remote_doc.stop_worker()
+                    self.remote_doc.set_finished(
                         final_status,
                         filter_dict({
                             'exit_code': exit_code,
@@ -577,7 +575,7 @@ class MLRunner(object):
                     )
 
         except Exception as ex:
-            if self.doc is None or not self.doc.has_set_finished:
+            if self.remote_doc is None or not self.remote_doc.has_set_finished:
                 getLogger(__name__).error(
                     'Failed to run the experiment.', exc_info=True)
                 self.client.set_finished(doc_id, 'FAILED', {
@@ -1076,233 +1074,6 @@ class ProgramHost(object):
         """Run the program, and get the exit code."""
         with self.exec_proc() as proc:
             return proc.wait()
-
-
-class ExperimentDoc(object):
-    """
-    Class to store the experiment document, and to push updates of the
-    document to the server in background thread.
-    """
-
-    KEYS_TO_EXPAND = ('config', 'result', 'webui', 'exc_info')
-
-    def __init__(self,
-                 client: MLStorageClient,
-                 value: DocumentType,
-                 heartbeat_interval: float = 120):
-        """
-        Construct a new :class:`ExperimentDoc`.
-
-        Args:
-            client: The MLStorage client.
-            value: The initial experiment document.
-            heartbeat_interval: The interval (seconds) between to heartbeats.
-        """
-        self._client = client
-        self._value = value
-        self._interval = heartbeat_interval
-        self._updates = None  # type: DocumentType
-        self._has_set_finished = False
-
-        # state of the background worker
-        self._stopped = False
-        self._thread = None  # type: Thread
-        self._heartbeat_time = 0.
-        self._update_lock = RLock()
-        self._wait_cond = Condition()
-
-    @property
-    def client(self) -> MLStorageClient:
-        """Get the MLStorage client."""
-        return self._client
-
-    @property
-    def value(self) -> DocumentType:
-        """Get the experiment document."""
-        return self._value
-
-    @property
-    def id(self) -> IdType:
-        """Get the experiment id."""
-        return self._value['_id']
-
-    @property
-    def updates(self) -> Optional[DocumentType]:
-        """Get the pending updates."""
-        return self._updates
-
-    @property
-    def has_set_finished(self) -> bool:
-        """
-        Whether or not :meth:`set_finished()` has been successfully called.
-        """
-        return self._has_set_finished
-
-    def merge_doc_updates(self) -> DocumentType:
-        """Merge the pending updates into the document locally."""
-        with self._update_lock:
-            doc = deep_copy(self._value)
-            updates = self._updates
-            if updates:
-                for key, val in updates.items():
-                    segments = key.split('.', 1)
-                    if len(segments) > 1 and segments[0] in self.KEYS_TO_EXPAND:
-                        if segments[0] not in doc:
-                            doc[segments[0]] = {}
-                        doc[segments[0]][segments[1]] = val
-                    else:
-                        doc[key] = val
-            return doc
-
-    def update(self, fields: DocumentType, notify_worker: bool = True):
-        """
-        Update the experiment document.
-
-        This method will queue the updates in background thread.
-
-        Args:
-            fields: The new fields.
-            notify_worker: Whether or not to notify the background worker?
-        """
-        with self._update_lock:
-            updates = self._updates
-            if updates is None:
-                updates = {}
-
-            for key, value in fields.items():
-                if key in self.KEYS_TO_EXPAND:
-                    # special treatment: flatten the result dict
-                    if value:
-                        for result_key, result_val in value.items():
-                            updates[f'{key}.{result_key}'] = result_val
-                else:
-                    updates[key] = value
-
-            self._updates = updates
-
-        if notify_worker:
-            with self._wait_cond:
-                self._wait_cond.notify_all()
-
-    def set_finished(self,
-                     status: str,
-                     updates: Optional[DocumentType] = None,
-                     retry_intervals: Sequence[float] = (10, 20, 30, 50, 80,
-                                                         130, 210)):
-        """
-        Set the experiment to be finished.
-
-        Args:
-            status: The finish status, one of ``{"COMPLETED", "FAILED"}``.
-            retry_intervals: The intervals to sleep between two attempts
-                to save the finish status.
-            updates: The other fields to be updated.
-        """
-        # gather all update fields
-        with self._update_lock:
-            if updates:
-                self.update(updates, notify_worker=False)
-            updates = self._updates
-            self._updates = None
-
-        # try to save the final status
-        last_ex = None
-
-        for itv in (0,) + tuple(retry_intervals):
-            if itv > 0:
-                time.sleep(itv)
-
-            try:
-                self._value = self.client.set_finished(self.id, status, updates)
-            except Exception as ex:
-                last_ex = ex
-                getLogger(__name__).warning(
-                    'Failed to store the final status of the experiment %s',
-                    self.id, exc_info=True
-                )
-            else:
-                last_ex = None
-                self._has_set_finished = True
-                break
-
-        if last_ex is not None:
-            raise last_ex
-
-    def _background_worker(self):
-        while not self._stopped:
-            # check whether or not there is new updates
-            with self._update_lock:
-                if self._updates is not None:
-                    updates = self._updates
-                    self._updates = None
-                else:
-                    updates = None
-
-            # save the updates
-            try:
-                self._value = self.client.update(self.id, updates)
-            except Exception:
-                # failed to save the updates, so we re-queue the updates
-                if updates:
-                    with self._update_lock:
-                        if self._updates is None:
-                            self._updates = copy.deepcopy(updates)
-                        else:
-                            for key, val in updates.items():
-                                if key not in self._updates:
-                                    self._updates[key] = val
-
-                getLogger(__name__).warning(
-                    'Failed to save the document of experiment %s',
-                    self.id, exc_info=True
-                )
-
-            # set heartbeat
-            elapsed = time.time() - self._heartbeat_time
-            if elapsed > self._interval:
-                try:
-                    self.client.heartbeat(self.id)
-                except Exception:
-                    getLogger(__name__).warning(
-                        'Failed to send heartbeat.', exc_info=True)
-                finally:
-                    # whether or not the heartbeat succeeded, we should
-                    # record the time that we sent the heartbeat.
-                    now_time = time.time()
-                    self._heartbeat_time = now_time
-                    elapsed = now_time - self._heartbeat_time
-
-            # wait for the next heartbeat time, or new updates arrived
-            with self._wait_cond:
-                if not self._stopped:
-                    sleep_itv = max(0., self._interval - elapsed)
-                    if sleep_itv > 0:
-                        self._wait_cond.wait(sleep_itv)
-
-    def start_worker(self):
-        """Start the background thread."""
-        if self._thread is not None:  # pragma: no cover
-            raise RuntimeError('Background thread has already started.')
-
-        self._stopped = False
-        self._thread = Thread(target=self._background_worker, daemon=True)
-        self._thread.start()
-
-    def stop_worker(self):
-        """Stop the background thread."""
-        if self._thread is not None:
-            with self._wait_cond:
-                self._stopped = True
-                self._wait_cond.notify_all()
-            self._thread.join()
-            self._thread = None
-
-    def __enter__(self):
-        self.start_worker()
-        return self
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        self.stop_worker()
 
 
 class SourceCopier(object):
