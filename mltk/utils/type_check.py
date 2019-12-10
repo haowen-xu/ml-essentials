@@ -105,10 +105,11 @@ class TypeCheckError(ValueError):
 class TypeCheckContext(object):
     """Maintain the context for type check."""
 
-    __slots__ = ('strict', 'ignore_missing', '_errors', '_scopes')
+    __slots__ = ('strict', 'inplace', 'ignore_missing', '_errors', '_scopes')
 
     def __init__(self,
                  strict: bool = False,
+                 inplace: bool = False,
                  ignore_missing: bool = False):
         """
         Construct a new :class:`TypeCheckContext`.
@@ -117,11 +118,13 @@ class TypeCheckContext(object):
             strict: If :obj:`True`, disable type conversion.
                 If :obj:`False`, the type checker will try its best to convert
                 the input `value` into desired type.
+            inplace: Whether or not to convert the input `value` in place?
             ignore_missing: Whether or not to ignore missing attribute?
                 (i.e., config field with neither a default value nor a user
                 specified value)
         """
         self.strict = strict
+        self.inplace = inplace
         self.ignore_missing = ignore_missing
         self._scopes: List[str] = []
 
@@ -324,6 +327,7 @@ def type_info_from_value(value: Any) -> 'TypeInfo':
 
 def validate_object(obj: TObject,
                     strict: bool = False,
+                    inplace: bool = False,
                     ignore_missing: bool = False) -> TObject:
     """
     Check the value of a given object.
@@ -333,12 +337,15 @@ def validate_object(obj: TObject,
         strict: If :obj:`True`, disable type conversion.
             If :obj:`False`, the type checker will try its best to convert
             the input `value` into desired type.
+        inplace: Whether or not to convert the input `value` in place?
         ignore_missing: Whether or not to ignore missing fields?
 
     Returns:
         The checked object.
     """
-    ctx = TypeCheckContext(strict=strict, ignore_missing=ignore_missing)
+    ctx = TypeCheckContext(strict=strict,
+                           inplace=inplace,
+                           ignore_missing=ignore_missing)
     return type_info_from_value(obj).check_value(obj, ctx)
 
 
@@ -359,6 +366,8 @@ class AnyTypeInfo(TypeInfo, Singleton):
     __slots__ = ()
 
     def _check_value(self, o: Any, context: TypeCheckContext) -> Any:
+        if not context.inplace:
+            o = deep_copy(o)
         return o
 
     def __str__(self):
@@ -592,6 +601,8 @@ class PathTypeInfo(PrimitiveTypeInfo[Path]):
                 o = Path(o)
         if not isinstance(o, Path):
             context.raise_error('value is not a Path')
+        if not context.inplace:
+            o = deep_copy(o)
         return o
 
     def __str__(self):
@@ -853,7 +864,13 @@ class SequenceTypeInfo(TypeInfo):
         for i, v in enumerate(o):
             with context.enter(str(i)):
                 buf.append(self.base_type_info.check_value(v, context))
-        return self.sequence_type(buf)
+        if context.inplace and isinstance(o, self.sequence_type) and \
+                not issubclass(self.sequence_type, tuple):
+            for i, v in enumerate(buf):
+                o[i] = v
+            return o
+        else:
+            return self.sequence_type(buf)
 
     def __eq__(self, other):
         return isinstance(other, self.__class__) and \
@@ -928,17 +945,26 @@ class DictTypeInfo(TypeInfo):
         if context.strict and not isinstance(o, dict):
             context.raise_error('value is not a dict')
 
-        # always get a copy of the object, even it is a dict
-        o = {key: o[key] for key in o}
+        # backup the original dict instance, in case `context.inplace = True`
+        origin = o if isinstance(o, dict) and context.inplace else None
+        dct = {}
+
+        if not hasattr(o, '__getitem__') or not hasattr(o, '__iter__'):
+            o = _ObjectDictProxy(o)
 
         # check all items
-        dct = {}
         for key in o:
             val = o[key]
             with context.enter(str(key)):
                 key = self.key_type_info.check_value(key, context)
                 val = self.val_type_info.check_value(val, context)
             dct[key] = val
+
+        # if orig, then use dct to update the original dict
+        if origin is not None:
+            origin.clear()
+            origin.update(dct)
+            dct = origin
 
         return dct
 
@@ -1037,10 +1063,10 @@ class ObjectFieldInfo(object):
 class ObjectFieldChecker(object):
     """Custom type checker for fields of an object."""
 
-    __slots__ = ('fields', 'pre', 'callback', '_wrapped_callback')
+    __slots__ = ('fields', 'pre', 'missing', 'callback', '_wrapped_callback')
 
     def __init__(self, fields: Sequence[str], callback: Callable,
-                 pre: bool = False):
+                 pre: bool = False, missing: bool = False):
         """
         Construct an instance of :class:`ObjectFieldChecker`.
 
@@ -1057,6 +1083,9 @@ class ObjectFieldChecker(object):
                 object has been constructed?  If :obj:`True`, the ``values``
                 argument that ``callback`` receives will be ``Dict[str, Any]``.
                 Otherwise ``values`` will be the object.
+            missing: Whether or not to call the field checker even if no
+                value is assigned to the field.  In such case, the field
+                value will be :obj:`NOT_SET` when the checker is called.
         """
         purified_fields = []
         for field in fields:
@@ -1067,6 +1096,7 @@ class ObjectFieldChecker(object):
                 purified_fields.append(field)
         fields = tuple(purified_fields)
         pre = bool(pre)
+        missing = bool(missing)
 
         # parse the argument specification of `callback`, and wrap it
         # by unified function interface ``(v, values, fields) -> None``
@@ -1089,21 +1119,25 @@ class ObjectFieldChecker(object):
         # store parameters
         self.fields = fields
         self.pre = pre
+        self.missing = missing
         self.callback = callback
         self._wrapped_callback = wrapped_callback
 
     def __repr__(self):
         return f'ObjectFieldChecker(fields={self.fields}, ' \
-               f'callback={self.callback}, pre={self.pre})'
+               f'callback={self.callback}, pre={self.pre}, ' \
+               f'missing={self.missing})'
 
     def __eq__(self, other):
         return isinstance(other, ObjectFieldChecker) and \
             self.fields == other.fields and \
             self.pre == other.pre and \
+            self.missing == other.missing and \
             self.callback == other.callback
 
     def __hash__(self):
-        return hash((ObjectFieldChecker, self.fields, self.pre, self.callback))
+        return hash((ObjectFieldChecker, self.fields, self.pre, self.missing,
+                     self.callback))
 
     def __call__(self, v, values, field):
         return self._wrapped_callback(v, values, field)
@@ -1165,6 +1199,27 @@ class ObjectFieldsDict(HashableDict):
     """A dict of object fields information."""
 
 
+class _ObjectDictProxy(object):
+
+    def __init__(self, value):
+        self.value = value
+
+    def __getitem__(self, item):
+        return getattr(self.value, item)
+
+    def __setitem__(self, item, value):
+        setattr(self.value, item, value)
+
+    def __contains__(self, item):
+        return hasattr(self.value, item)
+
+    def __iter__(self):
+        if hasattr(self.value, '__slots__'):
+            return iter(self.value.__slots__)
+        else:
+            return iter(self.value.__dict__)
+
+
 class ObjectTypeInfo(TypeInfo[TObject]):
     """
     >>> @dataclass
@@ -1217,6 +1272,8 @@ class ObjectTypeInfo(TypeInfo[TObject]):
         )
 
     def _check_value(self, o: Any, context: TypeCheckContext) -> TObject:
+        inplace_check: bool = False
+
         if not isinstance(o, self.object_type):
             if not context.strict:
                 if hasattr(o, '__getitem__') and hasattr(o, '__iter__'):
@@ -1227,64 +1284,114 @@ class ObjectTypeInfo(TypeInfo[TObject]):
                     context.raise_error(f'cannot cast value into {self}: '
                                         f'value is {o}')
 
-                kv = {}
-                # break down the "a.b" nested attributes
-                # into nested dict
-                for key in o_dict:
-                    val = o_dict[key]
-                    parts = key.split('.', 1)
-                    if len(parts) == 2:
-                        left, right = parts
-                        with context.enter(left):
-                            if left not in kv:
-                                kv[left] = {right: val}
-                            elif hasattr(kv[left], '__setitem__'):
-                                kv[left][right] = val
-                            else:
-                                context.raise_error(
-                                    'cannot merge a non-object value '
-                                    'with an object value'
-                                )
-                    else:
-                        with context.enter(key):
-                            if key not in kv or \
-                                    not hasattr(
-                                        kv[key], '__setitem__'):
-                                kv[key] = val
-                            else:
-                                context.raise_error(
-                                    'cannot merge an object value '
-                                    'with a non-object value'
-                                )
+                if issubclass(self.object_type, dict):
+                    # if target type is dict, do not expand nested attributes
+                    kv = {k: o_dict[k] for k in o_dict}
+
+                else:
+                    kv = {}
+                    # break down the "a.b" nested attributes
+                    # into nested dict
+                    for key in o_dict:
+                        val = o_dict[key]
+                        parts = key.split('.', 1)
+                        if len(parts) == 2:
+                            left, right = parts
+                            with context.enter(left):
+                                if left not in kv:
+                                    kv[left] = {right: val}
+                                elif hasattr(kv[left], '__setitem__'):
+                                    kv[left][right] = val
+                                else:
+                                    context.raise_error(
+                                        'cannot merge a non-object value '
+                                        'with an object value'
+                                    )
+                        else:
+                            with context.enter(key):
+                                if key not in kv or \
+                                        not hasattr(
+                                            kv[key], '__setitem__'):
+                                    kv[key] = val
+                                else:
+                                    context.raise_error(
+                                        'cannot merge an object value '
+                                        'with a non-object value'
+                                    )
 
             else:
                 context.raise_error(f'value is not an instance of {self}')
 
         else:
-            if hasattr(o, '__getitem__'):
-                kv = {k: o[k] for k in o}
+            if context.inplace and hasattr(o, '__getitem__') and \
+                    hasattr(o, '__setitem__') and hasattr(o, '__iter__'):
+                # inplace and o is Config-like class
+                kv = o
+                inplace_check = True
+            elif context.inplace:
+                # inplace and o is dataclass
+                kv = _ObjectDictProxy(o)
+                inplace_check = True
             else:
-                kv = copy.copy(o.__dict__)
+                if hasattr(o, '__getitem__'):
+                    kv = {k: o[k] for k in o}
+                else:
+                    kv = copy.copy(o.__dict__)
 
-        # run the root pre-checkers and field pre-checkers
+        # run the root pre-checkers
         for checker in self.root_checkers:
             if checker.pre:
-                ret = checker(kv)
-                if ret is not None:
-                    kv = ret
+                checker(kv)
 
-        field_names = list(kv)
+        # run the field pre-checkers
+        def is_field_nullable(name):
+            if name in self.fields:
+                field_info: ObjectFieldInfo = self.fields[name]
+                return isinstance(field_info.type_info,
+                                  (OptionalTypeInfo, NoneTypeInfo))
+            return True
+
+        def check_chk_ret(chk_ret, chk_field):
+            if chk_ret is None and not is_field_nullable(chk_field):
+                context.raise_error(
+                    f'The field checker for `{chk_field}` returns '
+                    f'None, but the field is not nullable. '
+                    f'Did you forget to return a value '
+                    f'from the checker?'
+                )
+            return chk_ret
+
+        def kv_get(name, default=NOT_SET):
+            return kv[name] if name in kv else default
+
+        kv_fields = list(kv)
+        field_names_include_missing = (  # for checker.missing = True
+            copy.copy(kv_fields) +
+            [k for k in self.fields if k not in kv]
+        )
+
         for checker in self.field_checkers:
             if checker.pre:
-                for field_name in checker.fields:
-                    if field_name == '*':
-                        for k in field_names:
+                for chk_field in checker.fields:
+                    if chk_field == '*':
+                        for k in (kv_fields if not checker.missing
+                                  else field_names_include_missing):
                             with context.enter(k):
-                                kv[k] = checker(kv[k], kv, k)
-                    if field_name in kv:
-                        with context.enter(field_name):
-                            kv[field_name] = checker(
-                                kv[field_name], kv, field_name)
+                                chk_ret = checker(kv_get(k), kv, k)
+                                chk_ret = check_chk_ret(chk_ret, k)
+                                if chk_ret is not NOT_SET:
+                                    kv[k] = chk_ret
+                                elif k in kv:  # we allow unset the field
+                                    del kv[k]
+
+                    elif checker.missing or chk_field in kv:
+                        with context.enter(chk_field):
+                            chk_ret = checker(kv_get(chk_field), kv, chk_field)
+                            chk_ret = check_chk_ret(chk_ret, chk_field)
+                            if chk_ret is not NOT_SET:
+                                kv[chk_field] = chk_ret
+                            elif chk_field in kv:  # we allow unset the field
+                                del kv[chk_field]
 
         # check the fields by registered checkers
         for field_name, field_info in self.fields.items():
@@ -1319,28 +1426,25 @@ class ObjectTypeInfo(TypeInfo[TObject]):
                     # update the checked value
                     kv[field_name] = field_val
 
-                # raise error if `required` is True
-                elif field_info.required and not context.ignore_missing:
-                    context.raise_error(f'field {field_name!r} is required, '
-                                        f'but its value is not specified')
-
                 # otherwise delete the attribute from key_values
                 else:
                     if field_name in kv:
                         del kv[field_name]
 
         # construct the object
-        o = self.object_type(**kv)
+        if isinstance(kv, _ObjectDictProxy):
+            o = kv.value
+        elif not inplace_check:
+            o = self.object_type(**kv)
 
-        # run the root post-checkers and field post-checkers
+        # run the root post-checkers
         for checker in self.root_checkers:
             if not checker.pre:
-                ret = checker(o)
-                if ret is not None:
-                    o = ret
+                checker(o)
 
+        # run the field post-checkers
         if hasattr(o, '__getitem__') and hasattr(o, '__iter__'):
-            field_names = list(o)
+            kv_fields = list(o)
 
             def object_get(o, k):
                 return o[k]
@@ -1350,27 +1454,54 @@ class ObjectTypeInfo(TypeInfo[TObject]):
 
             def object_set(o, k, v):
                 o[k] = v
+
+            def object_del(o, k):
+                del o[k]
+
         else:
-            field_names = list(o.__dict__)
-            object_get, object_contains, object_set = getattr, hasattr, setattr
+            kv_fields = list(o.__dict__)
+            object_get, object_contains, object_set, object_del = \
+                getattr, hasattr, setattr, delattr
+
+        field_names_include_missing = (
+            copy.copy(kv_fields) +
+            [k for k in self.fields if not object_contains(o, k)]
+        )
+
+        def safe_get(o, name, default=NOT_SET):
+            return object_get(o, name) if object_contains(o, name) else default
 
         for checker in self.field_checkers:
             if not checker.pre:
-                for field_name in checker.fields:
-                    if field_name == '*':
-                        for k in field_names:
+                for chk_field in checker.fields:
+                    if chk_field == '*':
+                        for k in (kv_fields if not checker.missing
+                                  else field_names_include_missing):
                             with context.enter(k):
-                                object_set(
-                                    o,
-                                    k,
-                                    checker(object_get(o, k), o, k)
-                                )
-                    elif object_contains(o, field_name):
-                        with context.enter(field_name):
-                            object_set(
-                                o,
-                                field_name,
-                                checker(object_get(o, field_name), o, field_name)
-                            )
+                                chk_ret = checker(safe_get(o, k), o, k)
+                                chk_ret = check_chk_ret(chk_ret, k)
+                                if chk_ret is not NOT_SET:
+                                    object_set(o, k, chk_ret)
+                                elif object_contains(o, k):
+                                    object_del(o, k)
+
+                    elif checker.missing or object_contains(o, chk_field):
+                        with context.enter(chk_field):
+                            chk_ret = checker(
+                                safe_get(o, chk_field), o, chk_field)
+                            chk_ret = check_chk_ret(chk_ret, chk_field)
+                            if chk_ret is not NOT_SET:
+                                object_set(o, chk_field, chk_ret)
+                            elif object_contains(o, chk_field):
+                                object_del(o, chk_field)
+
+        # Finally, we can check which required fields are missing,
+        # and raise error on missing fields.
+        for field_name, field_info in self.fields.items():
+            with context.enter(field_name):
+                if field_info.required and not context.ignore_missing and \
+                        not object_contains(o, field_name):
+                    context.raise_error(f'field {field_name!r} is required, '
+                                        f'but its value is not specified')
 
         return o

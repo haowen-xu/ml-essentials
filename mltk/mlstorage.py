@@ -1,3 +1,4 @@
+import os
 import re
 import time
 from datetime import datetime
@@ -308,13 +309,32 @@ class ExperimentRemoteDoc(RemoteDoc):
             retry_interval=30,
             relaxed_interval=5,
             heartbeat_interval=120 if enable_heartbeat else None,
-            keys_to_expand=('config', 'result', 'webui', 'exc_info'),
+            keys_to_expand=('config', 'result', 'progress', 'webui', 'exc_info'),
         )
         self.client: MLStorageClient = client
         self.id: IdType = id
         self.enable_heartbeat = enable_heartbeat
         self.last_response: Optional[DocumentType] = None  # last response from remote
         self.has_set_finished: bool = False
+
+    @classmethod
+    def from_env(cls, enable_heartbeat: bool = False
+                 ) -> Optional['ExperimentRemoteDoc']:
+        """
+        Construct a :class:`ExperimentRemoteDoc` according to environmental
+        variables.
+
+        Args:
+            enable_heartbeat: Whether or not to update heartbeat time?
+        """
+        server_uri = os.environ.get('MLSTORAGE_SERVER_URI', None)
+        experiment_id = os.environ.get('MLSTORAGE_EXPERIMENT_ID', None)
+        if server_uri and experiment_id:
+            client = MLStorageClient(server_uri)
+            experiment_id = ObjectId(experiment_id)
+            remote_doc = ExperimentRemoteDoc(
+                client, experiment_id, enable_heartbeat=enable_heartbeat)
+            return remote_doc
 
     def now_time_literal(self) -> str:
         """

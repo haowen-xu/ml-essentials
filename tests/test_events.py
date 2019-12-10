@@ -27,6 +27,12 @@ class EventTestCase(unittest.TestCase):
         self.assertEqual(ev.do(f2), f2)
 
         # test fire
+        ev(123, second=456)
+        for f in [f1, f2]:
+            self.assertEqual(f.call_count, 1)
+            self.assertEqual(f.call_args, ((123,), {'second': 456}))
+            f.reset_mock()
+
         ev.fire(123, second=456)
         for f in [f1, f2]:
             self.assertEqual(f.call_count, 1)
@@ -40,7 +46,7 @@ class EventTestCase(unittest.TestCase):
             f.reset_mock()
 
         # test remove callback
-        ev.undo(f1)
+        ev.cancel_do(f1)
 
     def test_decorator(self):
         f = Mock()
@@ -48,7 +54,7 @@ class EventTestCase(unittest.TestCase):
         ev = events['ev']
 
         # test call via `__call__`
-        @ev
+        @ev.do
         def method(*args, **kwargs):
             return f(*args, **kwargs)
 
@@ -104,6 +110,28 @@ class EventTestCase(unittest.TestCase):
         self.assertEqual(f1.call_count, 0)
         self.assertEqual(f2.call_count, 1)
         self.assertEqual(f2.call_args, ((123,), {'second': 456}))
+
+    def test_connect_object(self):
+        class MyObject(object):
+            watcher = []
+
+            def updated(self, *args, **kwargs):
+                self.watcher.append((args, kwargs))
+
+        events = EventHost()
+        obj = MyObject()
+        events.connect(obj)
+
+        # test exist method
+        events.fire('updated', 123, second=456)
+        self.assertEqual(obj.watcher, [
+            ((123,), {'second': 456})
+        ])
+        obj.watcher.clear()
+
+        # test non-exist method
+        events.fire('not_exist', 123, second=456)
+        self.assertEqual(obj.watcher, [])
 
     def test_fire_order(self):
         v = []
@@ -184,5 +212,5 @@ class EventTestCase(unittest.TestCase):
         self.assertEqual(events['empty-event']._callbacks, [])
 
         # un-register from an empty event will bring no side effect
-        events['empty-event'].undo(print)
+        events['empty-event'].cancel_do(print)
         self.assertEqual(events['empty-event']._callbacks, [])

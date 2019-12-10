@@ -19,18 +19,6 @@ class Event(object):
     def __repr__(self):
         return f'Event({self._name})'
 
-    def __call__(self, method: TCallback):
-        """
-        Decorate `method` to register it as a callback of this event.
-
-        Args:
-            method: The callback method.
-
-        Returns:
-            The given `method`.
-        """
-        return self.do(method)
-
     def do(self, callback: TCallback):
         """
         Register `callback` to this event.
@@ -41,7 +29,7 @@ class Event(object):
         self._callbacks.append(callback)
         return callback
 
-    def undo(self, callback: TCallback):
+    def cancel_do(self, callback: TCallback):
         """
         Unregister `callback` from this event.
 
@@ -60,6 +48,9 @@ class Event(object):
             *args: Positional arguments.
             **kwargs: Named arguments.
         """
+        self._host.fire(self._name, *args, **kwargs)
+
+    def __call__(self, *args, **kwargs):
         self._host.fire(self._name, *args, **kwargs)
 
     def reverse_fire(self, *args, **kwargs):
@@ -123,8 +114,12 @@ class EventHost(object):
 
     def connect(self, other: 'EventHost'):
         """
-        Connect this event host with another event host, such that all events
-        fired from this host will also be fired from that host.
+        Connect this event host with another event host or another object,
+        such that all events fired from this host will also be fired from
+        that host, or the function of that object with the name of the event
+        will also be called.
+
+        Connect an event host with another event host:
 
         >>> events1 = EventHost()
         >>> events1.on('updated',
@@ -136,6 +131,22 @@ class EventHost(object):
         >>> events1.fire('updated', 123, second=456)
         from events1 (123,) {'second': 456}
         from events2 (123,) {'second': 456}
+
+        Connect an event host with another object:
+
+        >>> class MyObject(object):
+        ...     def updated(self, *args, **kwargs):
+        ...         print('from MyObject', args, kwargs)
+
+        >>> events = EventHost()
+        >>> obj = MyObject()
+        >>> events.connect(obj)
+        >>> events.fire('updated', 123, second=456)
+        from MyObject (123,) {'second': 456}
+
+        Note if a event is fired, but the connected object does not have
+        a method with that name, no error will be raised, and the object
+        will be silently ignored on the event propagation chain.
 
         Args:
             other: The other event host.
@@ -174,38 +185,49 @@ class EventHost(object):
                 No error will be raised if it has not been registered yet.
         """
         if name in self._events:
-            self._events[name].undo(callback)
+            self._events[name].cancel_do(callback)
 
-    def fire(self, name, *args, **kwargs):
+    def _fire_host_event(self, host, name, reversed_, args, kwargs):
+        if isinstance(host, EventHost):
+            if reversed_:
+                host.reverse_fire(name, *args, **kwargs)
+            else:
+                host.fire(name, *args, **kwargs)
+        else:
+            fn = getattr(host, name, None)
+            if fn is not None:
+                fn(*args, **kwargs)
+
+    def fire(self, name_, *args, **kwargs):
         """
         Fire an event.
 
         Args:
-            name: Name of the event.
+            name_: Name of the event.
             *args: Positional arguments.
             \\**kwargs: Named arguments.
         """
-        event = self._events.get(name, None)
+        event = self._events.get(name_, None)
         if event is not None:
             for callback in event._callbacks:
                 callback(*args, **kwargs)
 
-            for host in self._connected_hosts:
-                host.fire(name, *args, **kwargs)
+        for host in self._connected_hosts:
+            self._fire_host_event(host, name_, False, args, kwargs)
 
-    def reverse_fire(self, name, *args, **kwargs):
+    def reverse_fire(self, name_, *args, **kwargs):
         """
         Fire an event, calling all callbacks in reversed order.
 
         Args:
-            name: Name of the event.
+            name_: Name of the event.
             *args: Positional arguments.
             \\**kwargs: Named arguments.
         """
-        event = self._events.get(name, None)
-        if event is not None:
-            for host in reversed(self._connected_hosts):
-                host.reverse_fire(name, *args, **kwargs)
+        for host in reversed(self._connected_hosts):
+            self._fire_host_event(host, name_, True, args, kwargs)
 
+        event = self._events.get(name_, None)
+        if event is not None:
             for callback in reversed(event._callbacks):
                 callback(*args, **kwargs)

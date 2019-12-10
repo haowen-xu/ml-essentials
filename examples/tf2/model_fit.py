@@ -1,27 +1,19 @@
 import tensorflow.keras as keras
 from tensorflow.keras import layers
 
+from mltk.integration import tf2
+
 
 if __name__ == '__main__':
     fashion_mnist = keras.datasets.fashion_mnist
     (train_images, train_labels), (test_images, test_labels) = \
         keras.datasets.fashion_mnist.load_data()
 
-    train_images = (train_images / 255.0).reshape([-1, 28, 28, 1])
-    test_images = (test_images / 255.0).reshape([-1, 28, 28, 1])
+    train_images = (train_images / 255.0).reshape([-1, 784])
+    test_images = (test_images / 255.0).reshape([-1, 784])
 
     model = keras.Sequential([
-        layers.Conv2D(32, kernel_size=(3, 3), padding='same', activation='relu',
-                      input_shape=(28, 28, 1)),
-        layers.Conv2D(32, kernel_size=(3, 3), padding='same', activation='relu'),
-        layers.Conv2D(64, kernel_size=(3, 3), padding='same', strides=2,
-                      activation='relu'),
-        layers.Conv2D(64, kernel_size=(3, 3), padding='same', activation='relu'),
-        layers.Conv2D(128, kernel_size=(3, 3), padding='same', strides=2,
-                      activation='relu'),
-        layers.Conv2D(128, kernel_size=(3, 3), padding='same', activation='relu'),
-        layers.GlobalAveragePooling2D(),
-        layers.Flatten(),
+        layers.Dense(500, activation='relu'),
         layers.Dense(10, activation='softmax')
     ])
 
@@ -29,9 +21,9 @@ if __name__ == '__main__':
                   loss='sparse_categorical_crossentropy',
                   metrics=['accuracy'])
 
-    model.fit(train_images, train_labels, epochs=1, verbose=2)
+    tf2.model_fit(
+        model, train_images, train_labels, epochs=1,
+        validation_split=0.2
+    )
 
-    test_loss, test_acc = model.evaluate(test_images,  test_labels, verbose=2)
-    print('\nTest accuracy:', test_acc)
-
-
+    test_loss, test_acc = tf2.model_evaluate(model, test_images, test_labels)

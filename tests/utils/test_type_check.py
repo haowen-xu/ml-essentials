@@ -13,7 +13,7 @@ from mltk import Config
 
 from mltk.utils import *
 from mltk.utils.type_check import (PrimitiveTypeInfo, MultiBaseTypeInfo,
-                                   SequenceTypeInfo)
+                                   SequenceTypeInfo, _ObjectDictProxy)
 
 
 class TypeCheckErrorTestCase(unittest.TestCase):
@@ -381,6 +381,18 @@ class TypeInfoTestCase(unittest.TestCase):
         self.assertEqual(ti.check_value('true'), 'true')
         self.assertEqual(ti.parse_string('true'), True)
 
+        # test inplace
+        v = [1, 2, 3]
+        v_copy = deep_copy(v)
+
+        v_out = ti.check_value(v)
+        self.assertIsNot(v_out, v)
+        self.assertEqual(v_out, v_copy)
+
+        v_out = ti.check_value(v, TypeCheckContext(inplace=True))
+        self.assertIs(v_out, v)
+        self.assertEqual(v_out, v_copy)
+
     def test_primitive(self):
         class MyPrimitive(PrimitiveTypeInfo):
             _expected_value = None
@@ -450,6 +462,10 @@ class TypeInfoTestCase(unittest.TestCase):
         ti = type_info(Path)
         self.assertEqual(str(ti), 'Path')
         self._check_cast(ti, Path('.'), [Path('.')], ['.'], [object()])
+
+        # test inplace = False
+        path = Path('.')
+        self.assertIsNot(ti.check_value(path), path)
 
     def test_none(self):
         ti = type_info(None)
@@ -568,6 +584,21 @@ class TypeInfoTestCase(unittest.TestCase):
         self.assertEqual(str(ti), 'Tuple[int, ...]')
         self.assertEqual(ti.check_value([1, 2, 3]), (1, 2, 3))
 
+    def test_list(self):
+        ti = SequenceTypeInfo(IntTypeInfo(), list)
+        v = [1, '2', 3.0]
+        v_orig = deep_copy(v)
+        v_ans = [1, 2, 3]
+
+        v_out = ti.check_value(v)
+        self.assertIsNot(v_out, v)
+        self.assertEqual(v_out, v_ans)
+        self.assertEqual(v, v_orig)
+
+        v_out = ti.check_value(v, TypeCheckContext(inplace=True))
+        self.assertIs(v_out, v)
+        self.assertEqual(v_out, v_ans)
+
     def test_dict(self):
         class MyDictLike(Mapping):
             def __init__(self, wrapped):
@@ -582,22 +613,50 @@ class TypeInfoTestCase(unittest.TestCase):
             def __iter__(self):
                 return iter(self.wrapped)
 
-        ti = type_info(Dict[int, float])
-        self.assertEqual(str(ti), 'Dict[int, float]')
+        ti = type_info(Dict[str, float])
+        self.assertEqual(str(ti), 'Dict[str, float]')
 
         self._check_cast(
             ti,
-            {12: 34.0, 56: 78.5},
-            [{12: 34.0, 56: 78.5}],
+            {'12': 34.0, '56': 78.5},
+            [{'12': 34.0, '56': 78.5}],
             [
-                {'12': 34, 56: '78.5'},
-                MyDictLike({'12': 34, 56: '78.5'})
+                {12: 34, '56': '78.5'},
+                MyDictLike({'12': 34, '56': '78.5'})
             ],
             [
                 object(),
                 [1, 2, 3]
             ]
         )
+
+        @dataclass
+        class MyDataClass(object):
+            a: int = 12
+            b: float = 34.5
+
+        self._check_cast(
+            ti,
+            {'a': 12.0, 'b': 34.5},
+            [{'a': 12.0, 'b': 34.5}],
+            [
+                MyDataClass()
+            ]
+        )
+
+        # test inplace
+        v = {12: 34, '56': '78.5'}
+        v_orig = deep_copy(v)
+        v_ans = {'12': 34.0, '56': 78.5}
+
+        v_out = ti.check_value(v)
+        self.assertIsNot(v_out, v)
+        self.assertEqual(v_out, v_ans)
+        self.assertEqual(v, v_orig)
+
+        v_out = ti.check_value(v, TypeCheckContext(inplace=True))
+        self.assertIs(v_out, v)
+        self.assertEqual(v_out, v_ans)
 
     def test_object_field_info(self):
         with pytest.raises(ValueError,
@@ -711,6 +770,7 @@ class TypeInfoTestCase(unittest.TestCase):
             fc = ObjectFieldChecker(fields, handler)
             self.assertEqual(fc.fields, fields)
             self.assertFalse(fc.pre)
+            self.assertFalse(fc.missing)
             self.assertEqual(fc, ObjectFieldChecker(fields, handler))
             self.assertEqual(hash(fc),
                              hash(ObjectFieldChecker(fields, handler)))
@@ -718,10 +778,14 @@ class TypeInfoTestCase(unittest.TestCase):
                 fc,
                 ObjectFieldChecker(fields, handler, pre=True)
             )
+            self.assertNotEqual(
+                fc,
+                ObjectFieldChecker(fields, handler, missing=True)
+            )
             self.assertEqual(
                 repr(fc),
                 f'ObjectFieldChecker(fields={fields}, callback={handler}, '
-                f'pre=False)'
+                f'pre=False, missing=False)'
             )
 
             # test call
@@ -789,6 +853,39 @@ class TypeInfoTestCase(unittest.TestCase):
         self.assertEqual(
             repr(fc), f'ObjectRootChecker(callback={f}, pre=True)')
 
+    def test_ObjectDictProxy(self):
+        def chk(o):
+            p = _ObjectDictProxy(o)
+            self.assertIs(p.value, o)
+            self.assertEqual(p['a'], 123)
+            self.assertTrue('a' in p)
+            self.assertFalse('b' in p)
+            self.assertEqual(list(p), ['a'])
+            p['a'] = 456
+            self.assertEqual(o.a, 456)
+
+        # test by slots
+        class MyClass1(object):
+            __slots__ = ('a',)
+
+            def __init__(self, a):
+                self.a = a
+
+            def __eq__(self, other):
+                return isinstance(other, MyClass1) and other.a == self.a
+
+        chk(MyClass1(a=123))
+
+        # test by dict
+        class MyClass2(object):
+            def __init__(self, a):
+                self.a = a
+
+            def __eq__(self, other):
+                return isinstance(other, MyClass2) and other.a == self.a
+
+        chk(MyClass2(a=123))
+
     def test_object_type_info(self):
         class Sink(object):
             def __init__(self, **kwargs):
@@ -833,13 +930,41 @@ class TypeInfoTestCase(unittest.TestCase):
             for strict in [True, False]:
                 for kwargs in [{'a': 456.0}, {'b': 456}]:
                     origin = target_type(**kwargs)
+                    origin_copy = deep_copy(origin)
+
+                    # test inplace = False
                     target = ti.check_value(
                         origin, TypeCheckContext(strict=strict))
+                    self.assertIsNot(target, origin)
                     target_kw = copy.copy(kwargs)
                     target_kw['a'] = float(target_kw.get('a', 123.5))
                     self.assertEqual(target, target_type(**target_kw))
                     self.assertEqual(origin, target_type(**kwargs))
                     self.assertIsNot(target, origin)
+
+                    # origin should not be changed when inplace = False
+                    self.assertEqual(origin, origin_copy)
+
+                    # test inplace = True
+                    if isinstance(origin, target_type):
+                        target = ti.check_value(
+                            origin,
+                            TypeCheckContext(strict=strict, inplace=True)
+                        )
+                        self.assertIs(target, origin)
+                        target_kw = copy.copy(kwargs)
+                        target_kw['a'] = float(target_kw.get('a', 123.5))
+                        self.assertEqual(target, target_type(**target_kw))
+
+                    else:
+                        target = ti.check_value(
+                            origin,
+                            TypeCheckContext(strict=strict, inplace=True)
+                        )
+                        self.assertIsNot(target, origin)
+                        target_kw = copy.copy(kwargs)
+                        target_kw['a'] = float(target_kw.get('a', 123.5))
+                        self.assertEqual(target, target_type(**target_kw))
 
             # hetergenuous type conversion
             self.assertEqual(ti.check_value({'a': 456}),
@@ -1022,15 +1147,22 @@ class TypeInfoTestCase(unittest.TestCase):
         watchers = []
 
         def field_checker(v, values, field, name=NOT_SET):
-            if 'pre' in name:
-                self.assertEqual(v, values[field])
-            else:
-                self.assertEqual(v, getattr(values, field))
             watchers.append({'name': name, 'v': v, 'values': copy.copy(values),
                              'field': field})
-            return v + 1
+            if v is not NOT_SET:
+                if 'pre' in name:
+                    self.assertEqual(v, values[field])
+                else:
+                    self.assertEqual(v, getattr(values, field))
+                return v + 1
+            else:
+                if 'pre' in name:
+                    self.assertNotIn(field, values)
+                else:
+                    self.assertFalse(hasattr(values, field))
+                return NOT_SET
 
-        def root_checker(values, name=NOT_SET, return_values=True):
+        def root_checker(values, name=NOT_SET):
             watchers.append({'name': name, 'values': copy.copy(values)})
             if 'pre' in name:
                 for k in values:
@@ -1038,8 +1170,6 @@ class TypeInfoTestCase(unittest.TestCase):
             else:
                 for k in values.__dict__:
                     setattr(values, k, getattr(values, k) + 1)
-            if return_values:
-                return values
 
         ti = ObjectTypeInfo(
             Sink, fields={
@@ -1051,21 +1181,25 @@ class TypeInfoTestCase(unittest.TestCase):
                     fields=['a', '*'],
                     callback=partial(field_checker, name='a_any_pre_checker'),
                     pre=True,
+                    missing=True,
                 ),
                 ObjectFieldChecker(
                     fields=['*', 'b'],
                     callback=partial(field_checker, name='any_b_post_checker'),
                     pre=False,
+                    missing=True,
                 ),
                 ObjectFieldChecker(
                     fields=['a', 'b'],
                     callback=partial(field_checker, name='ab_pre_checker'),
                     pre=True,
+                    missing=True,
                 ),
                 ObjectFieldChecker(
                     fields=['a', 'b'],
                     callback=partial(field_checker, name='ab_post_checker'),
                     pre=False,
+                    missing=True,
                 ),
                 ObjectFieldChecker(
                     fields=['b'],
@@ -1075,19 +1209,7 @@ class TypeInfoTestCase(unittest.TestCase):
             ],
             root_checkers=[
                 ObjectRootChecker(
-                    callback=partial(root_checker,
-                                     name='root_post_checker_no_return',
-                                     return_values=False),
-                    pre=False,
-                ),
-                ObjectRootChecker(
                     callback=partial(root_checker, name='root_pre_checker'),
-                    pre=True,
-                ),
-                ObjectRootChecker(
-                    callback=partial(root_checker,
-                                     name='root_pre_checker_no_return',
-                                     return_values=False),
                     pre=True,
                 ),
                 ObjectRootChecker(
@@ -1099,34 +1221,159 @@ class TypeInfoTestCase(unittest.TestCase):
 
         # test missing values
         watchers.clear()
-        self.assertEqual(
-            ti.check_value({}, TypeCheckContext(ignore_missing=True)),
-            Sink(b=24)
-        )
+        ret = ti.check_value({'c': 99}, TypeCheckContext(ignore_missing=True))
         self.assertListEqual(watchers, [
-            {'name': 'root_pre_checker', 'values': {}},
-            {'name': 'root_pre_checker_no_return', 'values': {}},
-            {'name': 'root_post_checker_no_return', 'values': Sink(b=20)},
-            {'name': 'root_post_checker', 'values': Sink(b=21)},
-            {'name': 'any_b_post_checker', 'v': 22, 'values': Sink(b=22), 'field': 'b'},
-            {'name': 'ab_post_checker', 'v': 23, 'values': Sink(b=23), 'field': 'b'},
+            {'name': 'root_pre_checker', 'values': {'c': 99}},
+            {'name': 'a_any_pre_checker', 'v': 100, 'values': {'c': 100}, 'field': 'c'},
+            {'name': 'a_any_pre_checker', 'v': NOT_SET, 'values': {'c': 101}, 'field': 'a'},
+            {'name': 'a_any_pre_checker', 'v': NOT_SET, 'values': {'c': 101}, 'field': 'b'},
+            {'name': 'ab_pre_checker', 'v': NOT_SET, 'values': {'c': 101}, 'field': 'a'},
+            {'name': 'ab_pre_checker', 'v': NOT_SET, 'values': {'c': 101}, 'field': 'b'},
+            {'name': 'root_post_checker', 'values': Sink(c=101, b=20)},
+            {'name': 'any_b_post_checker', 'v': 102, 'values': Sink(c=102, b=21), 'field': 'c'},
+            {'name': 'any_b_post_checker', 'v': 21, 'values': Sink(c=103, b=21), 'field': 'b'},
+            {'name': 'any_b_post_checker', 'v': NOT_SET, 'values': Sink(c=103, b=22), 'field': 'a'},
+            {'name': 'ab_post_checker', 'v': NOT_SET, 'values': Sink(c=103, b=22), 'field': 'a'},
+            {'name': 'ab_post_checker', 'v': 22, 'values': Sink(c=103, b=22), 'field': 'b'},
         ])
+        self.assertEqual(ret, Sink(b=23, c=103))
 
         # test all values provided
         watchers.clear()
-        self.assertEqual(ti.check_value({'a': 1, 'b': 2}), Sink(a=9, b=11))
+        ret = ti.check_value({'a': 1, 'b': 2, 'c': 99})
         self.assertListEqual(watchers, [
-            {'name': 'root_pre_checker', 'values': {'a': 1, 'b': 2}},
-            {'name': 'root_pre_checker_no_return', 'values': {'a': 2, 'b': 3}},
-            {'name': 'a_any_pre_checker', 'v': 3, 'values': {'a': 3, 'b': 4}, 'field': 'a'},
-            {'name': 'a_any_pre_checker', 'v': 4, 'values': {'a': 4, 'b': 4}, 'field': 'b'},
-            {'name': 'ab_pre_checker', 'v': 4, 'values': {'a': 4, 'b': 5}, 'field': 'a'},
-            {'name': 'ab_pre_checker', 'v': 5, 'values': {'a': 5, 'b': 5}, 'field': 'b'},
-            {'name': 'b_pre_checker', 'v': 6, 'values': {'a': 5, 'b': 6}, 'field': 'b'},
-            {'name': 'root_post_checker_no_return', 'values': Sink(a=5, b=7)},
-            {'name': 'root_post_checker', 'values': Sink(a=6, b=8)},
-            {'name': 'any_b_post_checker', 'v': 7, 'values': Sink(a=7, b=9), 'field': 'a'},
-            {'name': 'any_b_post_checker', 'v': 9, 'values': Sink(a=8, b=9), 'field': 'b'},
-            {'name': 'ab_post_checker', 'v': 8, 'values': Sink(a=8, b=10), 'field': 'a'},
-            {'name': 'ab_post_checker', 'v': 10, 'values': Sink(a=9, b=10), 'field': 'b'},
+            {'name': 'root_pre_checker', 'values': {'a': 1, 'b': 2, 'c': 99}},
+            {'name': 'a_any_pre_checker', 'v': 2, 'values': {'a': 2, 'b': 3, 'c': 100}, 'field': 'a'},
+            {'name': 'a_any_pre_checker', 'v': 3, 'values': {'a': 3, 'b': 3, 'c': 100}, 'field': 'b'},
+            {'name': 'a_any_pre_checker', 'v': 100, 'values': {'a': 3, 'b': 4, 'c': 100}, 'field': 'c'},
+            {'name': 'ab_pre_checker', 'v': 3, 'values': {'a': 3, 'b': 4, 'c': 101}, 'field': 'a'},
+            {'name': 'ab_pre_checker', 'v': 4, 'values': {'a': 4, 'b': 4, 'c': 101}, 'field': 'b'},
+            {'name': 'b_pre_checker', 'v': 5, 'values': {'a': 4, 'b': 5, 'c': 101}, 'field': 'b'},
+            {'name': 'root_post_checker', 'values': Sink(a=4, b=6, c=101)},
+            {'name': 'any_b_post_checker', 'v': 5, 'values': Sink(a=5, b=7, c=102), 'field': 'a'},
+            {'name': 'any_b_post_checker', 'v': 7, 'values': Sink(a=6, b=7, c=102), 'field': 'b'},
+            {'name': 'any_b_post_checker', 'v': 102, 'values': Sink(a=6, b=8, c=102), 'field': 'c'},
+            {'name': 'ab_post_checker', 'v': 6, 'values': Sink(a=6, b=8, c=103), 'field': 'a'},
+            {'name': 'ab_post_checker', 'v': 8, 'values': Sink(a=7, b=8, c=103), 'field': 'b'},
         ])
+        self.assertEqual(ret, Sink(a=7, b=9, c=103))
+
+        ################################
+        # test validators: return None #
+        ################################
+
+        def field_checker(v, values, field):
+            return None
+
+        # test not nullable
+        ti = ObjectTypeInfo(
+            Sink, fields={
+                'a': ObjectFieldInfo('a', type_info(int), required=False),
+            },
+            field_checkers=[
+                ObjectFieldChecker(fields=['a', 'b'], callback=field_checker)
+            ],
+            root_checkers=[]
+        )
+
+        self.assertEqual(ti.check_value({'b': 123}), Sink(b=None))
+        with pytest.raises(TypeCheckError,
+                           match='The field checker for `a` returns None'):
+            _ = ti.check_value({'a': 123})
+
+        # test not nullable by wildcard field checker
+        ti = ObjectTypeInfo(
+            Sink, fields={
+                'a': ObjectFieldInfo('a', type_info(int), required=False),
+            },
+            field_checkers=[
+                ObjectFieldChecker(fields=['*'], callback=field_checker)
+            ],
+            root_checkers=[]
+        )
+
+        self.assertEqual(ti.check_value({'b': 123}), Sink(b=None))
+        with pytest.raises(TypeCheckError,
+                           match='The field checker for `a` returns None, '
+                                 'but the field is not nullable.'):
+            _ = ti.check_value({'a': 123})
+
+        # test nullable
+        ti = ObjectTypeInfo(
+            Sink, fields={
+                'a': ObjectFieldInfo('a', type_info(Optional[int])),
+            },
+            field_checkers=[
+                ObjectFieldChecker(fields=['a', 'b'], callback=field_checker)
+            ],
+            root_checkers=[]
+        )
+        self.assertEqual(ti.check_value({'a': 123}), Sink(a=None))
+
+        ###################################
+        # test validators: return NOT_SET #
+        ###################################
+
+        def field_checker(v, values, field):
+            return NOT_SET
+
+        # test via non-wildcard field checker
+        ti = ObjectTypeInfo(
+            Sink, fields={
+                'a': ObjectFieldInfo('a', type_info(int), required=False),
+                'b': ObjectFieldInfo('b', type_info(int), required=False),
+            },
+            field_checkers=[
+                ObjectFieldChecker(fields=['a'], callback=field_checker),
+                ObjectFieldChecker(fields=['b'], callback=field_checker,
+                                   pre=True),
+            ],
+            root_checkers=[]
+        )
+
+        self.assertEqual(ti.check_value({'a': 12, 'b': 34}), Sink())
+
+        # test via wildcard field checker
+        ti = ObjectTypeInfo(
+            Sink, fields={
+                'a': ObjectFieldInfo('a', type_info(int), required=False),
+                'b': ObjectFieldInfo('b', type_info(int), required=False),
+            },
+            field_checkers=[
+                ObjectFieldChecker(fields=['*'], callback=field_checker),
+            ],
+            root_checkers=[]
+        )
+
+        self.assertEqual(ti.check_value({'a': 12, 'b': 34}), Sink())
+
+        # test via wildcard field checker, pre = True
+        ti = ObjectTypeInfo(
+            Sink, fields={
+                'a': ObjectFieldInfo('a', type_info(int), required=False),
+                'b': ObjectFieldInfo('b', type_info(int), required=False),
+            },
+            field_checkers=[
+                ObjectFieldChecker(fields=['*'], callback=field_checker,
+                                   pre=True),
+            ],
+            root_checkers=[]
+        )
+
+        self.assertEqual(ti.check_value({'a': 12, 'b': 34}), Sink())
+
+        # test unset should cause error if required = True
+        ti = ObjectTypeInfo(
+            Sink, fields={
+                'a': ObjectFieldInfo('a', type_info(int)),
+            },
+            field_checkers=[
+                ObjectFieldChecker(fields=['*'], callback=field_checker),
+            ],
+            root_checkers=[]
+        )
+
+        with pytest.raises(TypeCheckError,
+                           match='at a: field \'a\' is required, but its '
+                                 'value is not specified'):
+            _ = ti.check_value({'a': 12})

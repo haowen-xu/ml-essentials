@@ -6,6 +6,7 @@ import os
 import warnings
 from argparse import ArgumentParser, Action
 from dataclasses import dataclass, is_dataclass
+from functools import partial
 from typing import *
 
 import yaml
@@ -18,6 +19,7 @@ __all__ = [
     'config_params', 'get_config_params', 'ConfigMeta',
     'Config', 'validate_config', 'config_to_dict', 'config_defaults',
     'ConfigLoader',
+    'format_config', 'print_config', 'save_config',
 ]
 
 # general special attributes that is recognized by ``type_info``
@@ -119,7 +121,6 @@ def root_checker(pre: bool = False):
     ...     def _checker(cls, values):
     ...         if values.c != values.a + values.b:
     ...             raise ValueError('a + b != c')
-    ...         return values
 
     >>> validate_config(MyConfig(a=1, b='2', c=3.0))
     MyConfig(a=1, b=2, c=3)
@@ -578,7 +579,7 @@ def config_to_dict(o, flatten: bool = False) -> Dict[str, Any]:
 
     >>> cfg = Config(a=1, b=Config(value=2))
     >>> config_to_dict(cfg)
-    {'a': 1, 'b': Config(value=2)}
+    {'a': 1, 'b': {'value': 2}}
     >>> config_to_dict(cfg, flatten=True)
     {'a': 1, 'b.value': 2}
 
@@ -603,7 +604,10 @@ def config_to_dict(o, flatten: bool = False) -> Dict[str, Any]:
                 dct[key] = val
     else:
         def populate_item(key, val):
-            dct[key] = val
+            if isinstance(val, Config) or is_dataclass(val):
+                dct[key] = config_to_dict(val, flatten=flatten)
+            else:
+                dct[key] = val
 
     if isinstance(o, Config):
         for key in o:
@@ -850,7 +854,7 @@ class ConfigLoader(Generic[TConfig]):
         Args:
             path: Path of the file.
         """
-        name, ext = os.path.splitext(path)
+        ext = os.path.splitext(path)[-1]
         ext = ext.lower()
         if ext in ('.yml', '.yaml'):
             self.load_yaml(path)
@@ -859,7 +863,9 @@ class ConfigLoader(Generic[TConfig]):
         else:
             raise IOError(f'Unsupported config file extension: {ext}')
 
-    def build_arg_parser(self, parser: Optional[ArgumentParser] = None
+    def build_arg_parser(self,
+                         parser: Optional[ArgumentParser] = None,
+                         config_file_option: Optional[str] = '--config-file'
                          ) -> ArgumentParser:
         """
         Build an argument parser.
@@ -871,6 +877,8 @@ class ConfigLoader(Generic[TConfig]):
         Args:
             parser: The parser to populate the arguments.
                 If not specified, will create a new parser.
+            config_file_option: If not :obj:`None`, will add an option
+                to allow loading config files.  Defaults to ``--config-file``.
 
         Returns:
             The argument parser.
@@ -900,6 +908,29 @@ class ConfigLoader(Generic[TConfig]):
                     if isinstance(value, dict):
                         value = LeafDict(value)
                     setattr(namespace, self.dest, value)
+
+        class _LoadFileAction(Action):
+
+            def __call__(self, parser, namespace, values, option_string=None):
+                path = values
+                ext = os.path.splitext(path)[-1].lower()
+                if ext == '.json':
+                    loader = json_loads
+                elif ext in ('.yaml', '.yml'):
+                    loader = partial(yaml.load, Loader=yaml.SafeLoader)
+                else:
+                    raise IOError(f'Cannot load config file {path!r}: '
+                                  f'unsupported file extension.')
+
+                with codecs.open(values, 'rb', 'utf-8') as f:
+                    obj = loader(f.read())
+                    if not isinstance(obj, dict):
+                        raise ValueError(
+                            f'Expected an object from config file {path!r}, '
+                            f'but got: {obj!r}'
+                        )
+                    for key, val in obj.items():
+                        setattr(namespace, key, val)
 
         # gather the nested config fields
         def get_field_help(field_info: ObjectFieldInfo):
@@ -936,9 +967,18 @@ class ConfigLoader(Generic[TConfig]):
                         default=NOT_SET, metavar=str(field_info.type_info),
                     )
 
-        # populate the arguments
         if parser is None:
             parser = ArgumentParser()
+
+        # populate the config file argument
+        if config_file_option:
+            parser.add_argument(
+                config_file_option,
+                help='Load a config file (".json" or ".yaml").',
+                action=_LoadFileAction, default=NOT_SET, metavar='PATH',
+            )
+
+        # populate the config field arguments
         gather_args(type_info(self.config_cls), '')
 
         return parser
@@ -971,3 +1011,76 @@ class ConfigLoader(Generic[TConfig]):
         parsed = {key: value for key, value in vars(namespace).items()
                   if value is not NOT_SET}
         self.load_object(parsed)
+
+
+def format_config(config: Config,
+                  title: Optional[str] = 'Configurations',
+                  formatter: Callable[[Any], str] = str,
+                  delimiter_char: str = '=') -> str:
+    """
+    Format a config object into str.
+
+    >>> print(format_config(Config(a=123, b=Config(value=456))))
+    Configurations
+    ==============
+    a         123
+    b.value   456
+
+    See Also:
+        :func:`format_key_values` for more details about the arguments.
+    """
+    from .formatting import format_key_values
+    return format_key_values(
+        key_values=config,
+        title=title,
+        formatter=formatter,
+        delimiter_char=delimiter_char,
+    )
+
+
+def print_config(config: Config,
+                 title: Optional[str] = 'Configurations',
+                 formatter: Callable[[Any], str] = str,
+                 delimiter_char: str = '=',
+                 print_func: Callable[[str], None] = print) -> None:
+    """
+    Print a config object to stdout.
+
+    >>> print_config(Config(a=123, b=Config(value=456)))
+    Configurations
+    ==============
+    a         123
+    b.value   456
+
+    See Also:
+        :func:`format_key_values` for more details about the arguments.
+    """
+    print_func(format_config(config, title, formatter, delimiter_char))
+
+
+def save_config(config: Config, path: str, flatten: bool = True) -> None:
+    """
+    Save the specified config object into a file.
+
+    Args:
+        config: The config object.
+        path: The output file path.
+        flatten: Whether or not to convert the config into dict
+            using ``flatten = True``?  See :func:`config_to_dict`
+            for more explanations.
+    """
+    # convert the config object into a dict
+    cfg_dict = config_to_dict(config, flatten=flatten)
+
+    # serialize the config dict by different serializers according to extension
+    ext = os.path.splitext(path)[-1].lower()
+    if ext == '.json':
+        cnt = json_dumps(cfg_dict)
+    elif ext in ('.yml', '.yaml'):
+        cnt = yaml.dump(cfg_dict, Dumper=yaml.SafeDumper)
+    else:
+        raise IOError(f'Unsupported file extension: {ext}')
+
+    # now write to file
+    with codecs.open(path, 'wb', 'utf-8') as f:
+        f.write(cnt)

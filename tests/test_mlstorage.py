@@ -1,3 +1,4 @@
+import os
 import time
 import unittest
 import uuid
@@ -347,7 +348,7 @@ class ExperimentRemoteDocTestCase(unittest.TestCase):
         self.assertEqual(doc.relaxed_interval, 5)
         self.assertEqual(doc.heartbeat_interval, 120)
         self.assertEqual(doc.keys_to_expand,
-                         ('config', 'result', 'webui', 'exc_info'))
+                         ('config', 'result', 'progress', 'webui', 'exc_info'))
         self.assertIs(doc.client, client)
         self.assertEqual(doc.id, id)
         self.assertEqual(doc.enable_heartbeat, True)
@@ -358,6 +359,26 @@ class ExperimentRemoteDocTestCase(unittest.TestCase):
         doc = ExperimentRemoteDoc(client, id, enable_heartbeat=False)
         self.assertEqual(doc.enable_heartbeat, False)
         self.assertEqual(doc.heartbeat_interval, None)
+
+    def test_from_env(self):
+        os.environ.pop('MLSTORAGE_SERVER_URI', None)
+        os.environ.pop('MLSTORAGE_EXPERIMENT_ID', None)
+        self.assertIsNone(ExperimentRemoteDoc.from_env())
+
+        server_uri = 'http://127.0.0.1:8080'
+        experiment_id = ObjectId()
+        os.environ['MLSTORAGE_SERVER_URI'] = server_uri
+        os.environ['MLSTORAGE_EXPERIMENT_ID'] = str(experiment_id)
+        doc = ExperimentRemoteDoc.from_env()
+        self.assertEqual(doc.enable_heartbeat, False)
+        self.assertEqual(doc.id, experiment_id)
+        self.assertEqual(doc.client.uri, server_uri)
+
+        doc = ExperimentRemoteDoc.from_env(enable_heartbeat=True)
+        self.assertEqual(doc.enable_heartbeat, True)
+
+        os.environ.pop('MLSTORAGE_SERVER_URI', None)
+        os.environ.pop('MLSTORAGE_EXPERIMENT_ID', None)
 
     def test_push_to_remote(self):
         client = MLStorageClient('http://127.0.0.1:8080')

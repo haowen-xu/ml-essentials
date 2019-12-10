@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-
+import codecs
 import os
 import shutil
 import sys
@@ -296,3 +296,20 @@ class ExperimentTestCase(unittest.TestCase):
                         batch_size=128
                     )
                 ))
+
+            # test override config
+            with TemporaryDirectory() as temp_dir2:
+                yaml_path = os.path.join(temp_dir2, 'config.yaml')
+                with codecs.open(yaml_path, 'wb', 'utf-8') as f:
+                    f.write('max_epoch: 888\nmax_step: 999\n')
+                exp = Experiment(_YourConfig,
+                                 args=['--output-dir=' + output_dir,
+                                       '--config-file=' + yaml_path,
+                                       '--max_epoch=444'])
+                with exp:
+                    self.assertEqual(exp.config, _YourConfig(
+                        max_epoch=444, max_step=999,
+                        train=_YourConfig.train(
+                            batch_size=128
+                        )
+                    ))

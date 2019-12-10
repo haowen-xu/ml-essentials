@@ -2,6 +2,8 @@ import codecs
 import os
 import shutil
 import unittest
+
+import yaml
 from dataclasses import dataclass
 from tempfile import TemporaryDirectory
 from typing import *
@@ -269,7 +271,7 @@ class ConfigTestCase(unittest.TestCase):
         cfg = MyConfig()
         self.assertDictEqual(
             config_to_dict(cfg),
-            {'a': 1, 'nested': MyConfig.nested()}
+            {'a': 1, 'nested': {'b': 2.0, 'data_object': {'value': 3}}}
         )
         self.assertDictEqual(
             config_to_dict(cfg, flatten=True),
@@ -545,3 +547,101 @@ class ConfigLoaderTestCase(unittest.TestCase):
             MyConfig(nested1=MyConfig.nested1(a=1230), nested2=Nested2(b=4560),
                      nested3=Nested3(c=7890))
         )
+
+    def test_parse_args_config_file(self):
+        class MyConfig(Config):
+            a = 123
+
+        def quick_parse(args) -> MyConfig:
+            loader = ConfigLoader(MyConfig)
+            loader.parse_args(args)
+            return loader.get()
+
+        # test success parse
+        with TemporaryDirectory() as temp_dir:
+            yaml_path = os.path.join(temp_dir, 'config.yml')
+            json_path = os.path.join(temp_dir, 'config.json')
+
+            with codecs.open(yaml_path, 'wb', 'utf-8') as f:
+                f.write('a: 456\n')
+
+            with codecs.open(json_path, 'wb', 'utf-8') as f:
+                f.write('{"a": 789}\n')
+
+            # now test the config file arg
+            cfg = quick_parse([])
+            self.assertEqual(cfg.a, 123)
+
+            cfg = quick_parse(['--config-file=' + yaml_path])
+            self.assertEqual(cfg.a, 456)
+
+            cfg = quick_parse(['--config-file=' + json_path])
+            self.assertEqual(cfg.a, 789)
+
+            # now test override
+            cfg = quick_parse(['--config-file=' + yaml_path,
+                               '--config-file=' + json_path])
+            self.assertEqual(cfg.a, 789)
+
+            cfg = quick_parse(['--config-file=' + json_path,
+                               '--config-file=' + yaml_path])
+            self.assertEqual(cfg.a, 456)
+
+            cfg = quick_parse(['--config-file=' + json_path,
+                               '--a=999'])
+            self.assertEqual(cfg.a, 999)
+
+            cfg = quick_parse(['--a=999',
+                               '--config-file=' + yaml_path])
+            self.assertEqual(cfg.a, 456)
+
+        # test error parse
+        with TemporaryDirectory() as temp_dir:
+            # unsupported file extensions
+            ini_path = os.path.join(temp_dir, 'config.ini')
+            with codecs.open(ini_path, 'wb', 'utf-8') as f:
+                f.write('a = 123\n')
+            with pytest.raises(IOError, match='unsupported file extension'):
+                quick_parse(['--config-file=' + ini_path])
+
+            # content not object
+            yaml_path = os.path.join(temp_dir, 'config.yaml')
+            with codecs.open(yaml_path, 'wb', 'utf-8') as f:
+                f.write('123\n')
+            with pytest.raises(ValueError,
+                               match='Expected an object from config file'):
+                quick_parse(['--config-file=' + yaml_path])
+
+    def test_save_config(self):
+        config = Config(a=1, b=Config(c=2.0, d='3'))
+        expected_non_flatten = {'a': 1, 'b': {'c': 2.0, 'd': '3'}}
+        expected_flatten = {'a': 1, 'b.c': 2.0, 'b.d': '3'}
+
+        with TemporaryDirectory() as temp_dir:
+            for flatten, expected in zip([True, False],
+                                         [expected_flatten,
+                                          expected_non_flatten]):
+                # test write as json
+                json_path = os.path.join(temp_dir, 'config.json')
+                save_config(config, json_path, flatten=flatten)
+                with codecs.open(json_path, 'rb', 'utf-8') as f:
+                    o = json_loads(f.read())
+                self.assertEqual(o, expected)
+
+                # test write as yaml
+                yaml_path = os.path.join(temp_dir, 'config.yml')
+                save_config(config, yaml_path, flatten=flatten)
+                with codecs.open(yaml_path, 'rb', 'utf-8') as f:
+                    o = yaml.load(f.read(), Loader=yaml.SafeLoader)
+                self.assertEqual(o, expected)
+
+                # test write as yaml
+                yaml_path = os.path.join(temp_dir, 'config.yaml')
+                save_config(config, yaml_path, flatten=flatten)
+                with codecs.open(yaml_path, 'rb', 'utf-8') as f:
+                    o = yaml.load(f.read(), Loader=yaml.SafeLoader)
+                self.assertEqual(o, expected)
+
+            # test other extensions should raise error
+            with pytest.raises(IOError, match='Unsupported file extension'):
+                save_config(config, os.path.join(temp_dir, 'config.ini'))

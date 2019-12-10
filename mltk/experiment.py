@@ -3,6 +3,7 @@ import os
 import shutil
 import sys
 import zipfile
+from argparse import ArgumentParser
 from tempfile import TemporaryDirectory
 from typing import *
 
@@ -84,7 +85,7 @@ class Experiment(Generic[TConfig]):
     """
 
     def __init__(self,
-                 config_or_cls: Union[TConfig, Type[TConfig]],
+                 config_or_cls: Union[Type[TConfig], TConfig],
                  script_name: Optional[str] = None,
                  output_dir: Optional[str] = None,
                  load_config_file: bool = True,
@@ -521,11 +522,12 @@ class Experiment(Generic[TConfig]):
 
         # build the argument parser
         if self.args is not None:
-            arg_parser = config_loader.build_arg_parser()
+            arg_parser = ArgumentParser()
             arg_parser.add_argument(
-                '--output-dir', help='Specify the experiment output directory.',
-                default=NOT_SET
+                '--output-dir', help='Set the experiment output directory.',
+                default=NOT_SET, metavar='PATH'
             )
+            arg_parser = config_loader.build_arg_parser(arg_parser)
             parsed_args = arg_parser.parse_args(self.args)
 
             output_dir = parsed_args.output_dir
@@ -541,7 +543,7 @@ class Experiment(Generic[TConfig]):
         else:
             parsed_args = {}
 
-        # load configuration
+        # load previously saved configuration
         config_files = [
             os.path.join(self.output_dir, 'config.yml'),
             os.path.join(self.output_dir, 'config.json'),
@@ -553,6 +555,7 @@ class Experiment(Generic[TConfig]):
             except Exception:  # pragma: no cover
                 raise IOError(f'Failed to load config file: {config_file!r}')
 
+        # load the cli arguments
         config_loader.load_object(parsed_args)
 
         self._config = config_loader.get()
