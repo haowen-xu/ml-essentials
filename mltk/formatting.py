@@ -108,6 +108,8 @@ def format_duration(duration: DurationType,
     '0s'
     >>> format_duration(-1)
     '1s ago'
+    >>> format_duration(0.01, precision=2)
+    '0.01s'
     >>> format_duration(1.00, precision=2)
     '1s'
     >>> format_duration(1.125)

@@ -12,6 +12,7 @@ import pytest
 
 from mltk import *
 from mltk.utils import *
+from mltk.type_check import *
 
 
 class ConfigTestCase(unittest.TestCase):

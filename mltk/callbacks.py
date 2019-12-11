@@ -1,20 +1,22 @@
+import os
 import sys
 import time
-from datetime import datetime
-
 from dataclasses import dataclass
+from datetime import datetime
 from typing import *
 
 import numpy as np
 
+from .checkpoint import BaseCheckpoint, CheckpointManager
 from .formatting import MetricsFormatter, format_duration
 from .metrics import ScalarMetricsLogger
 from .mlstorage import ExperimentRemoteDoc
-from .stage import *
+from .stateful import StatefulObjectGroup
 from .utils import NOT_SET
 
 __all__ = [
-    'LoggerCallbackContext', 'LoggerCallback',
+    'CallbackData', 'Callback',
+    'LoggerCallback', 'AutoCheckpoint', 'EarlyStopping',
 ]
 
 
@@ -22,7 +24,129 @@ ProgressDict = MetricsDict = Dict[str, Any]
 
 
 @dataclass
-class LoggerCallbackContext(object):
+class CallbackData(object):
+    """
+    Data carried by a cycle begin/end event from :class:`Callback`.
+    """
+
+    __slots__ = ('stage', 'index', 'size', 'start_timestamp',
+                 'end_timestamp', 'exc_time', 'metrics')
+
+    stage: 'Stage'
+    """The stage that calls the callback."""
+
+    index: Optional[int]
+    """Index of the epoch or batch."""
+
+    size: Optional[int]
+    """The size of the batch."""
+
+    start_timestamp: float
+    """Start timestamp of the stage/epoch/batch."""
+
+    end_timestamp: Optional[float]
+    """End timestamp of the stage/epoch/batch, available at the cycle end."""
+
+    exc_time: Optional[float]
+    """Execution time of the stage/epoch/batch, available at the cycle end."""
+
+    metrics: Optional[MetricsDict]
+    """Metrics dict, available at the cycle end."""
+
+
+class Callback(object):
+    """Base class of a callback for a machine learning stage."""
+
+    ##################
+    # general events #
+    ##################
+    def on_stage_begin(self, data: CallbackData):
+        pass
+
+    def on_stage_end(self, data: CallbackData):
+        pass
+
+    def on_epoch_begin(self, data: CallbackData):
+        pass
+
+    def on_epoch_end(self, data: CallbackData):
+        pass
+
+    def on_batch_begin(self, data: CallbackData):
+        pass
+
+    def on_batch_end(self, data: CallbackData):
+        pass
+
+    ################
+    # train events #
+    ################
+    def on_train_begin(self, data: CallbackData):
+        pass
+
+    def on_train_end(self, data: CallbackData):
+        pass
+
+    def on_train_epoch_begin(self, data: CallbackData):
+        pass
+
+    def on_train_epoch_end(self, data: CallbackData):
+        pass
+
+    def on_train_batch_begin(self, data: CallbackData):
+        pass
+
+    def on_train_batch_end(self, data: CallbackData):
+        pass
+
+    #####################
+    # validation events #
+    #####################
+    def on_validation_begin(self, data: CallbackData):
+        pass
+
+    def on_validation_end(self, data: CallbackData):
+        pass
+
+    def on_validation_batch_begin(self, data: CallbackData):
+        pass
+
+    def on_validation_batch_end(self, data: CallbackData):
+        pass
+
+    ###############
+    # test events #
+    ###############
+    def on_test_begin(self, data: CallbackData):
+        pass
+
+    def on_test_end(self, data: CallbackData):
+        pass
+
+    def on_test_batch_begin(self, data: CallbackData):
+        pass
+
+    def on_test_batch_end(self, data: CallbackData):
+        pass
+
+    ##################
+    # predict events #
+    ##################
+    def on_predict_begin(self, data: CallbackData):
+        pass
+
+    def on_predict_end(self, data: CallbackData):
+        pass
+
+    def on_predict_batch_begin(self, data: CallbackData):
+        pass
+
+    def on_predict_batch_end(self, data: CallbackData):
+        pass
+
+
+@dataclass
+class _LoggerContext(object):
     """
     Class that maintains the context of an open stage in
     :class:`BaseLoggerCallback`.
@@ -31,7 +155,7 @@ class LoggerCallbackContext(object):
     __slots__ = ('stage', 'progress', 'metrics_collector', 'batch_metrics',
                  'last_console_log_time', 'last_remote_log_time')
 
-    stage: Stage
+    stage: 'Stage'
     progress: Dict[str, Any]
     metrics_collector: ScalarMetricsLogger
     """
@@ -52,9 +176,9 @@ class LoggerCallbackContext(object):
     """Last time that the logs have been pushed to remote."""
 
     @staticmethod
-    def new_context(stage) -> 'LoggerCallbackContext':
+    def new_context(stage) -> '_LoggerContext':
         now_time = time.time()
-        return LoggerCallbackContext(
+        return _LoggerContext(
             stage=stage,
             progress={},
             metrics_collector=ScalarMetricsLogger(),
@@ -101,7 +225,7 @@ class LoggerCallbackContext(object):
             self.batch_metrics.update(
                 {k: np.mean(v) for k, v in raw_metrics.items()})
 
-    def copy_metrics_from_nested_context(self, ctx: 'LoggerCallbackContext'):
+    def copy_metrics_from_nested_context(self, ctx: '_LoggerContext'):
         """
         Copy the final metrics from nested stage.
 
@@ -133,7 +257,22 @@ def _console_writer(s: str) -> None:
     sys.stdout.flush()
 
 
-class LoggerCallback(StageCallback):
+def _print_log(console_writer: Callable[[str], ...],
+               text: str, nl: bool = True, show_time: bool = True):
+    if console_writer is not None:
+        if show_time:
+            time_str = _format_datetime(datetime.now())
+            text = f'[{time_str}] {text}'
+        if nl:
+            text += '\n'
+        console_writer(text)
+
+
+def _format_datetime(dt: datetime) -> str:
+    return dt.strftime('%Y-%m-%d %H:%M:%S.%f')
+
+
+class LoggerCallback(Callback):
     """
     Callback that logs training/testing/predicting progress and metrics
     to console and to MLStorage server.
@@ -167,7 +306,7 @@ class LoggerCallback(StageCallback):
     console, but will indeed be sent to the server.
     """
 
-    ctx_stack: List[LoggerCallbackContext]
+    ctx_stack: List[_LoggerContext]
     remote_doc: Optional[ExperimentRemoteDoc]
     console_writer: Optional[Callable[[str], None]]
     console_log_batch_freq: Optional[int]
@@ -201,26 +340,22 @@ class LoggerCallback(StageCallback):
             self.console_log_batch_freq is not None or \
             self.console_log_interval is not None
 
+    def _print_log(self, text: str, nl: bool = True, show_time: bool = False):
+        if self.console_writer is not None:
+            _print_log(self.console_writer, text=text, nl=nl,
+                       show_time=show_time)
+
     @property
-    def ctx(self) -> LoggerCallbackContext:
+    def ctx(self) -> _LoggerContext:
         return self.ctx_stack[-1]
 
     @property
-    def stage(self) -> Stage:
+    def stage(self) -> 'Stage':
         return self.ctx.stage
 
     @property
     def is_nested(self) -> bool:
         return len(self.ctx_stack) > 1
-
-    def _print(self, text: str, nl: bool = True, time: bool = False):
-        if self.console_writer is not None:
-            if time:
-                time_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')
-                text = f'[{time_str}] {text}'
-            if nl:
-                text += '\n'
-            self.console_writer(text)
 
     def _push_to_remote(self, result: Optional[Dict[str, Any]] = None):
         if self.remote_doc is not None:
@@ -253,7 +388,7 @@ class LoggerCallback(StageCallback):
                 buf.append(result_str)
             if suffix:
                 buf.append(suffix)
-            self._print(' - '.join(buf), time=show_time)
+            self._print_log(' - '.join(buf), show_time=show_time)
             self.ctx.last_console_log_time = time.time()
 
         # push the stage logs to remote
@@ -279,16 +414,20 @@ class LoggerCallback(StageCallback):
         else:
             self.ctx.progress.pop('eta', None)
 
-    def on_stage_begin(self, data: StageCallbackData):
-        self.ctx_stack.append(LoggerCallbackContext.new_context(data.stage))
+    def on_stage_begin(self, data: CallbackData):
+        self.ctx_stack.append(_LoggerContext.new_context(data.stage))
         if not self.is_nested:
-            self._print(f'{self.stage.name.capitalize()} started', time=True)
-            self.remote_doc.start_worker()
+            self._print_log(
+                f'{self.stage.name.capitalize()} started',
+                show_time=True
+            )
+            if self.remote_doc is not None:
+                self.remote_doc.start_worker()
 
-    def on_stage_end(self, data: StageCallbackData):
+    def on_stage_end(self, data: CallbackData):
         try:
             # set the progress info
-            self._update_progress_time_info(self.stage.end_timestamp)
+            self._update_progress_time_info(data.end_timestamp)
 
             # replace the epoch metrics with stage metrics, if provided
             if data.metrics:
@@ -311,11 +450,11 @@ class LoggerCallback(StageCallback):
             self.ctx_stack.pop()
 
             # stop the remote doc worker if there is no context left
-            if not self.ctx_stack:
+            if not self.ctx_stack and self.remote_doc is not None:
                 self.remote_doc.stop_worker()
                 self.remote_doc.flush()
 
-    def on_epoch_begin(self, data: StageCallbackData):
+    def on_epoch_begin(self, data: CallbackData):
         # set the progress info
         self.ctx.progress['epoch'] = data.index + 1
         if data.stage.epoch.total is not None:
@@ -326,11 +465,11 @@ class LoggerCallback(StageCallback):
 
         # write epoch beginning log
         if not self.is_nested:
-            self._print(f'>> Epoch {data.stage.epoch} <<')
+            self._print_log(f'>> Epoch {data.stage.epoch} <<', show_time=False)
 
-    def on_epoch_end(self, data: StageCallbackData):
+    def on_epoch_end(self, data: CallbackData):
         # set the progress info
-        self._update_progress_time_info(self.stage.epoch.end_timestamp)
+        self._update_progress_time_info(data.end_timestamp)
         if data.exc_time is not None:
             self.ctx.progress['epoch_time'] = data.exc_time
 
@@ -351,33 +490,36 @@ class LoggerCallback(StageCallback):
                          f'{format_duration(data.exc_time, precision=3)}'
         self._write_stage_or_epoch_end_logs(log_prefix, log_suffix)
 
-    def on_batch_begin(self, data: StageCallbackData):
+    def on_batch_begin(self, data: CallbackData):
         self.ctx.progress['batch'] = data.index + 1
         if data.stage.batch.total is not None:
             self.ctx.progress['total_batches'] = data.stage.batch.total
+        self.ctx.progress.pop('batch_metrics', None)
 
         # set the context to enter next batch
         self.ctx.next_batch()
 
-    def on_batch_end(self, data: StageCallbackData):
+    def on_batch_end(self, data: CallbackData):
         # update the progress info
-        self._update_progress_time_info(self.stage.batch.end_timestamp)
+        self._update_progress_time_info(data.end_timestamp)
         if data.exc_time is not None:
             self.ctx.progress['batch_time'] = data.exc_time
+        if data.metrics:
+            # This assignment will be cleared at the beginning of the next batch
+            self.ctx.progress['batch_metrics'] = data.metrics
+        else:
+            self.ctx.progress.pop('batch_metrics', None)
 
         # update the metrics
         self.ctx.update_metrics(data.metrics, batch_size=data.size)
-
-        # check whether or not we need to write console / remote log
-        end_timestamp = self.stage.batch.end_timestamp
 
         # check whether or not we need to write logs to console or to remote
         batch_id = data.index + 1
         need_remote_log = need_console_log = False
 
         if self.stage.epoch is not None and batch_id != self.stage.batch.total:
-            # write to console or push to remote only if this is not the final
-            # batch of an epoch (where later the end of epoch log will be written).
+            # write to console only if this is not the final batch of an epoch
+            # (where later the end of epoch log will be written).
 
             if not self.is_nested:
                 # do not write to console for nested stage
@@ -390,13 +532,13 @@ class LoggerCallback(StageCallback):
                 elif self.console_log_interval is not None:
                     # batch freq not set, check the log time interval
                     need_console_log = (
-                        end_timestamp - self.ctx.last_console_log_time >=
+                        data.end_timestamp - self.ctx.last_console_log_time >=
                         self.console_log_interval
                     )
 
             if self.remote_log_interval is not None:
                 need_remote_log = (
-                    end_timestamp - self.ctx.last_remote_log_time >=
+                    data.end_timestamp - self.ctx.last_remote_log_time >=
                     self.remote_log_interval
                 )
 
@@ -419,9 +561,211 @@ class LoggerCallback(StageCallback):
             if data.exc_time is not None:
                 buf.append(f'batch_time: '
                            f'{format_duration(data.exc_time, precision=3)}')
-            self._print(' - '.join(buf))
+            self._print_log(' - '.join(buf), show_time=False)
             self.ctx.last_console_log_time = time.time()
 
         # push the logs to remote
         if need_remote_log:
             self._push_to_remote(batch_result)
+
+
+class BaseCheckpointCallback(Callback):
+
+    checkpoint: BaseCheckpoint
+    root_dir: str
+    stage: Optional['Stage'] = None
+    checkpoint_manager: Optional[CheckpointManager] = None
+    last_checkpoint_time: Optional[float] = None
+
+    def __init__(self,
+                 checkpoint: BaseCheckpoint,
+                 root_dir: str):
+        self.checkpoint = checkpoint
+        self.root_dir = os.path.abspath(root_dir)
+
+    def on_train_begin(self, data: CallbackData):
+        if self.stage is not None:
+            raise RuntimeError(f'`{self.__class__.__name__}` does not support '
+                               f'nested train stage.')
+        self.stage = data.stage
+        self.checkpoint_manager = CheckpointManager(
+            checkpoint=self.checkpoint,
+            root_dir=self.root_dir,
+            state_objects=StatefulObjectGroup({
+                '__stage': data.stage.state_proxy()
+            })
+        )
+        self.last_checkpoint_time = time.time()
+
+    def on_train_end(self, data: CallbackData):
+        self.stage = None
+        self.checkpoint_manager = None
+        self.last_checkpoint_time = None
+
+    def make_checkpoint(self):
+        epoch, batch = (self.stage.epoch.index + 1,
+                        self.stage.batch.index + 1)
+        ckpt_name = f'epoch-{epoch}-batch-{batch}'
+        self.checkpoint_manager.save(ckpt_name)
+        self.last_checkpoint_time = time.time()
+
+
+class AutoCheckpoint(BaseCheckpointCallback):
+
+    interval: Optional[float]
+    epoch_freq: Optional[int]
+    batch_freq: Optional[int]
+    restore_checkpoint: Union[str, bool]
+
+    def __init__(self,
+                 checkpoint: BaseCheckpoint,
+                 root_dir: str,
+                 interval: Optional[float] = None,
+                 epoch_freq: Optional[int] = None,
+                 batch_freq: Optional[int] = None,
+                 restore_checkpoint: Union[str, bool] = True):
+        not_none_count = (
+            int(interval is None) + int(epoch_freq is None) +
+            int(batch_freq is None)
+        )
+        if not_none_count != 1:
+            raise ValueError('One and only one of `interval`, `epoch_freq` '
+                             'and `batch_freq` should be specified.')
+        if not isinstance(restore_checkpoint, str) and \
+                restore_checkpoint not in (True, False):
+            raise TypeError(f'`restore_checkpoint` must be a str or a bool: '
+                            f'got {restore_checkpoint!r}')
+
+        super().__init__(checkpoint=checkpoint, root_dir=root_dir)
+        self.interval = interval
+        self.epoch_freq = epoch_freq
+        self.batch_freq = batch_freq
+        self.restore_checkpoint = restore_checkpoint
+
+    def on_train_begin(self, data: CallbackData):
+        super().on_train_begin(data)
+
+        # restore the checkpoint
+        if isinstance(self.restore_checkpoint, str):
+            ckpt_path = self.restore_checkpoint
+        elif self.restore_checkpoint is True:
+            ckpt_path = self.checkpoint_manager.latest_checkpoint()
+        else:
+            ckpt_path = None
+
+        if ckpt_path is not None:
+            self.checkpoint_manager.restore(ckpt_path)
+            _print_log(
+                sys.stdout.write,
+                f'restored from checkpoint: {ckpt_path}\n',
+                show_time=True
+            )
+            sys.stdout.flush()
+
+    def on_train_epoch_end(self, data: CallbackData):
+        need_checkpoint = (
+            (self.epoch_freq is not None and
+             (data.index + 1) % self.epoch_freq == 0) or
+            (self.interval is not None and
+             data.end_timestamp - self.last_checkpoint_time >= self.interval)
+        )
+        if need_checkpoint:
+            self.make_checkpoint()
+
+    def on_train_batch_end(self, data: CallbackData):
+        need_checkpoint = (
+            (self.batch_freq is not None and
+             (data.index + 1) % self.batch_freq == 0) or
+            (data.index + 1 != self.stage.batch.total and
+             # if the last batch in an epoch, better to make the checkpoint at
+             # the end of the epoch
+             self.interval is not None and
+             data.end_timestamp - self.last_checkpoint_time >= self.interval)
+        )
+        if need_checkpoint:
+            self.make_checkpoint()
+
+
+class EarlyStopping(BaseCheckpointCallback):
+
+    BEST_METRIC_VALUE_KEY = '__mltk.callbacks.EarlyStopping.best_metric_value'
+    BEST_CHECKPOINT_NAME_KEY = '__mltk.callbacks.EarlyStopping.' \
+                               'best_checkpoint_name'
+    metric_name: str
+    _metric_is_better: Callable[[Any, Any], bool]
+
+    def __init__(self,
+                 checkpoint: BaseCheckpoint,
+                 root_dir: str,
+                 metric_name: str,
+                 metric_smaller_is_better: bool = True):
+        super().__init__(checkpoint=checkpoint, root_dir=root_dir)
+        self.metric_name = str(metric_name)
+        if metric_smaller_is_better:
+            self._metric_is_better = lambda new, old: old is None or new < old
+        else:
+            self._metric_is_better = lambda new, old: old is None or new > old
+
+    @property
+    def best_metric_value(self) -> Optional[Any]:
+        return self.stage.memo.get(self.BEST_METRIC_VALUE_KEY, None)
+
+    @best_metric_value.setter
+    def best_metric_value(self, value: Any):
+        self.stage.memo[self.BEST_METRIC_VALUE_KEY] = value
+
+    @property
+    def best_checkpoint_name(self) -> Optional[str]:
+        return self.stage.memo.get(self.BEST_CHECKPOINT_NAME_KEY, None)
+
+    @best_checkpoint_name.setter
+    def best_checkpoint_name(self, value: str):
+        self.stage.memo[self.BEST_CHECKPOINT_NAME_KEY] = value
+
+    def _maybe_save_checkpoint(self, metrics: Optional[Dict[str, Any]]):
+        if metrics and self.metric_name in metrics:
+            metric_value = metrics[self.metric_name]
+            if self._metric_is_better(metric_value, self.best_metric_value):
+                ckpt_path = self.checkpoint_manager.save()
+                ckpt_name = os.path.relpath(ckpt_path, self.root_dir)
+                _print_log(
+                    sys.stdout.write,
+                    f'saved checkpoint for early-stopping: {ckpt_path}',
+                    show_time=True
+                )
+                self.best_metric_value = metric_value
+                self.best_checkpoint_name = ckpt_name
+
+    def on_train_batch_end(self, data: CallbackData):
+        super().on_train_batch_end(data)
+        self._maybe_save_checkpoint(data.metrics)
+
+    def on_train_epoch_end(self, data: CallbackData):
+        super().on_train_epoch_end(data)
+        self._maybe_save_checkpoint(data.metrics)
+
+    def on_train_end(self, data: CallbackData):
+        super().on_train_end(data)
+
+        # restore from the best checkpoint, if any checkpoint is saved
+        best_checkpoint_name = self.best_checkpoint_name
+        if best_checkpoint_name is None:
+            _print_log(
+                sys.stdout.write,
+                f'[WARNING] No checkpoint has been saved for early-stopping.  '
+                f'Did you forget to update the validation metric '
+                f'{self.metric_name!r}?',
+                show_time=False
+            )
+        else:
+            ckpt_path = os.path.join(self.root_dir, best_checkpoint_name)
+            self.checkpoint_manager.restore(ckpt_path)
+            _print_log(
+                sys.stdout.write,
+                f'restored early-stopping checkpoint from: '
+                f'{ckpt_path}',
+            )
+
+
+# imported for type annotation on `Stage`
+from .stage import Stage

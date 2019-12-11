@@ -1,7 +1,7 @@
 import tensorflow.keras as keras
 from tensorflow.keras import layers
 
-from mltk.integration import tf2
+from mltk.integration.keras import *
 
 
 if __name__ == '__main__':
@@ -21,9 +21,9 @@ if __name__ == '__main__':
                   loss='sparse_categorical_crossentropy',
                   metrics=['accuracy'])
 
-    tf2.model_fit(
+    model_fit(
         model, train_images, train_labels, epochs=1,
         validation_split=0.2
     )
 
-    test_loss, test_acc = tf2.model_evaluate(model, test_images, test_labels)
+    test_loss, test_acc = model_evaluate(model, test_images, test_labels)

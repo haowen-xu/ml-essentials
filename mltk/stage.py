@@ -2,14 +2,13 @@ import time
 from enum import Enum
 from typing import *
 
-from dataclasses import dataclass
-
 __all__ = [
     'CycleCounter', 'TimedCycleCounter', 'StageType', 'Stage',
-    'StageCallbackData', 'StageCallback',
 ]
 
 from mltk.utils import NOT_SET
+from . import StatefulObject
+from .stateful import StateDict
 
 MetricsDict = Dict[str, Any]
 INDEX_BEFORE_FIRST_CYCLE = -1
@@ -189,6 +188,35 @@ class StageType(str, Enum):
     PREDICT = 'predict'
 
 
+class _StageCounterState(StatefulObject):
+
+    stage: 'Stage'
+
+    def __init__(self, stage: 'Stage'):
+        self.stage = stage
+
+    def get_state_dict(self) -> StateDict:
+        ret = {}
+        if self.stage.epoch is not None:
+            ret['epoch'] = self.stage.epoch.index
+        if self.stage.batch is not None:
+            ret['batch'] = self.stage.batch.index
+        if self.stage.global_step is not None:
+            ret['global_step'] = self.stage.global_step
+        ret['memo'] = self.stage.memo
+        return ret
+
+    def set_state_dict(self, state: StateDict):
+        if 'epoch' in state:
+            self.stage.epoch.index = state['epoch']
+        if 'batch' in state:
+            self.stage.batch.index = state['batch']
+        if 'global_step' in state:
+            self.stage.global_step = state['global_step']
+        if 'memo' in state:
+            self.stage.memo.update(state['memo'])
+
+
 class Stage(object):
     """
     Base class of a machine learning stage.
@@ -205,7 +233,8 @@ class Stage(object):
     batch_size: Optional[int]  # batch size, i.e., maximum number of samples in each batch
     data_count: Optional[int]  # number of data samples
     global_step: Optional[int]  # the global step counter
-    callbacks: List['StageCallback']
+    memo: Dict[str, Any]
+    callbacks: List['Callback']
     known_metrics: Tuple[str, ...]
 
     _current_batch_size: Optional[int] = None  # the size of the current active batch
@@ -225,7 +254,7 @@ class Stage(object):
                  batch_size: Optional[int] = None,
                  data_count: Optional[int] = None,
                  global_step: Optional[int] = None,
-                 callbacks: Optional[Sequence['StageCallback']] = None,
+                 callbacks: Optional[Sequence['Callback']] = None,
                  known_metrics: Optional[Sequence[str]] = None):
 
         epoch = TimedCycleCounter(initial_epoch, total=total_epochs) \
@@ -239,6 +268,7 @@ class Stage(object):
         self.batch_size = batch_size
         self.data_count = data_count
         self.global_step = global_step
+        self.memo = {}
         self.callbacks = callbacks
 
         if known_metrics is not None:
@@ -255,6 +285,9 @@ class Stage(object):
             One of: {"train", "validation", "test", "predict"}.
         """
         return self.type.value
+
+    def state_proxy(self) -> _StageCounterState:
+        return _StageCounterState(self)
 
     __METRIC_PREFIXES = {
         StageType.TRAIN: ('train_', ''),
@@ -353,10 +386,12 @@ class Stage(object):
 
         # call the callbacks
         event_name = f'on_{self.name}_begin'
-        event_data = StageCallbackData(
+        event_data = CallbackData(
             stage=self,
             index=None,
             size=None,
+            start_timestamp=self.start_timestamp,
+            end_timestamp=None,
             exc_time=None,
             metrics=None
         )
@@ -371,10 +406,12 @@ class Stage(object):
 
             # call the callbacks
             event_name = f'on_{self.name}_end'
-            event_data = StageCallbackData(
+            event_data = CallbackData(
                 stage=self,
                 index=None,
                 size=None,
+                start_timestamp=self.start_timestamp,
+                end_timestamp=self.end_timestamp,
                 exc_time=exc_time,
                 metrics=metrics
             )
@@ -395,10 +432,12 @@ class Stage(object):
 
         # call the callbacks
         event_name = f'on_{self.name}_epoch_begin'
-        event_data = StageCallbackData(
+        event_data = CallbackData(
             stage=self,
             index=self.epoch.index,
             size=self._current_epoch_size,
+            start_timestamp=self.epoch.start_timestamp,
+            end_timestamp=None,
             exc_time=None,
             metrics=None
         )
@@ -409,17 +448,18 @@ class Stage(object):
     def exit_epoch(self,
                    metrics: Optional[MetricsDict] = None):
         if self.epoch is None:
-            raise RuntimeError(f'Stage {self!r} does not have an epoch '
-                               f'counter.')
+            raise RuntimeError(f'Stage does not have an epoch counter.')
         self.epoch.pre_exit()
 
         try:
             # call the callbacks
             event_name = f'on_{self.name}_epoch_end'
-            event_data = StageCallbackData(
+            event_data = CallbackData(
                 stage=self,
                 index=self.epoch.index,
                 size=self._current_epoch_size,
+                start_timestamp=self.epoch.start_timestamp,
+                end_timestamp=self.epoch.end_timestamp,
                 exc_time=self.epoch.last_cycle_time,
                 metrics=metrics
             )
@@ -442,10 +482,12 @@ class Stage(object):
 
         # call the callbacks
         event_name = f'on_{self.name}_batch_begin'
-        event_data = StageCallbackData(
+        event_data = CallbackData(
             stage=self,
             index=self.batch.index,
             size=self._current_batch_size,
+            start_timestamp=self.batch.start_timestamp,
+            end_timestamp=None,
             exc_time=None,
             metrics=None
         )
@@ -459,10 +501,12 @@ class Stage(object):
         try:
             # call the callbacks
             event_name = f'on_{self.name}_batch_end'
-            event_data = StageCallbackData(
+            event_data = CallbackData(
                 stage=self,
                 index=self.batch.index,
                 size=self._current_batch_size,
+                start_timestamp=self.batch.start_timestamp,
+                end_timestamp=self.batch.end_timestamp,
                 exc_time=self.batch.last_cycle_time,
                 metrics=metrics
             )
@@ -475,116 +519,5 @@ class Stage(object):
             self._current_batch_size = None
 
 
-@dataclass
-class StageCallbackData(object):
-    """
-    Data carried by a cycle begin/end event from :class:`StageCallback`.
-    """
-
-    __slots__ = ('stage', 'index', 'size', 'exc_time', 'metrics')
-
-    stage: Stage
-    """The stage that calls the callback."""
-
-    index: Optional[int]
-    """Index of the epoch or batch."""
-
-    size: Optional[int]
-    """The size of the batch."""
-
-    exc_time: Optional[float]
-    """Execution time of the stage/epoch/batch, available at the cycle end."""
-
-    metrics: Optional[MetricsDict]
-    """Metrics dict, available at the cycle end."""
-
-
-class StageCallback(object):
-    """Base class of a callback for a machine learning stage."""
-
-    ##################
-    # general events #
-    ##################
-    def on_stage_begin(self, data: StageCallbackData):
-        pass
-
-    def on_stage_end(self, data: StageCallbackData):
-        pass
-
-    def on_epoch_begin(self, data: StageCallbackData):
-        pass
-
-    def on_epoch_end(self, data: StageCallbackData):
-        pass
-
-    def on_batch_begin(self, data: StageCallbackData):
-        pass
-
-    def on_batch_end(self, data: StageCallbackData):
-        pass
-
-    ################
-    # train events #
-    ################
-    def on_train_begin(self, data: StageCallbackData):
-        pass
-
-    def on_train_end(self, data: StageCallbackData):
-        pass
-
-    def on_train_epoch_begin(self, data: StageCallbackData):
-        pass
-
-    def on_train_epoch_end(self, data: StageCallbackData):
-        pass
-
-    def on_train_batch_begin(self, data: StageCallbackData):
-        pass
-
-    def on_train_batch_end(self, data: StageCallbackData):
-        pass
-
-    #####################
-    # validation events #
-    #####################
-    def on_validation_begin(self, data: StageCallbackData):
-        pass
-
-    def on_validation_end(self, data: StageCallbackData):
-        pass
-
-    def on_validation_batch_begin(self, data: StageCallbackData):
-        pass
-
-    def on_validation_batch_end(self, data: StageCallbackData):
-        pass
-
-    ###############
-    # test events #
-    ###############
-    def on_test_begin(self, data: StageCallbackData):
-        pass
-
-    def on_test_end(self, data: StageCallbackData):
-        pass
-
-    def on_test_batch_begin(self, data: StageCallbackData):
-        pass
-
-    def on_test_batch_end(self, data: StageCallbackData):
-        pass
-
-    ##################
-    # predict events #
-    ##################
-    def on_predict_begin(self, data: StageCallbackData):
-        pass
-
-    def on_predict_end(self, data: StageCallbackData):
-        pass
-
-    def on_predict_batch_begin(self, data: StageCallbackData):
-        pass
-
-    def on_predict_batch_end(self, data: StageCallbackData):
-        pass
+# imported for type annotation on `CallbackData` and `Callback`
+from .callbacks import CallbackData, Callback

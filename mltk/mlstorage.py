@@ -12,7 +12,7 @@ from urllib.parse import quote as urlquote
 import requests
 from bson import ObjectId
 
-from .utils import json_dumps, json_loads, RemoteDoc, merge_doc_fields, RemoteUpdateMode
+from .utils import json_dumps, json_loads, RemoteDoc
 
 __all__ = ['MLStorageClient', 'ExperimentRemoteDoc']
 

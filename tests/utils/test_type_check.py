@@ -12,8 +12,9 @@ import pytest
 from mltk import Config
 
 from mltk.utils import *
-from mltk.utils.type_check import (PrimitiveTypeInfo, MultiBaseTypeInfo,
-                                   SequenceTypeInfo, _ObjectDictProxy)
+from mltk.type_check import *
+from mltk.type_check import (PrimitiveTypeInfo, MultiBaseTypeInfo,
+                             SequenceTypeInfo, _ObjectDictProxy)
 
 
 class TypeCheckErrorTestCase(unittest.TestCase):

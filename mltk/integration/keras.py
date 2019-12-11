@@ -1,22 +1,25 @@
+import sys
 from typing import *
 
-import tensorflow as tf
-from tensorflow import keras
-
-from ..callbacks import *
+from ..callbacks import Callback, LoggerCallback
 from ..stage import *
+
+# detect whether the user uses separated keras package, or the keras
+# package shipped with TensorFlow
+if 'keras' in sys.modules:
+    import keras
+elif 'tensorflow.keras' in sys.modules:
+    from tensorflow import keras
+else:
+    raise ImportError('`mltk.integration.keras` must be imported after '
+                      'either the separated `keras` package or the '
+                      '`tensorflow.keras` package has been imported.')
 
 __all__ = [
     'model_fit', 'model_evaluate', 'model_predict',
-    'KerasCallbackWrapper',
 ]
 
-
-if tf.__version__.split('.')[0] != '2':
-    raise RuntimeError('`mltk.integration.tf2` requires TensorFlow 2.0')
-
-
-CallbackTypes = Union[StageCallback, keras.callbacks.Callback]
+CallbackTypes = Union[Callback, keras.callbacks.Callback]
 
 
 def wrap_callbacks(callbacks: Sequence[CallbackTypes]
@@ -25,7 +28,7 @@ def wrap_callbacks(callbacks: Sequence[CallbackTypes]
     stage_callbacks_buf = []
 
     for cb in (callbacks or ()):
-        if isinstance(cb, StageCallback):
+        if isinstance(cb, Callback):
             stage_callbacks_buf.append(cb)
         else:
             if stage_callbacks_buf:
@@ -135,12 +138,12 @@ def dict_get(logs: Optional[Dict[str, Any]], key: str, default: Any = None):
 
 class KerasCallbackWrapper(keras.callbacks.Callback):
 
-    callbacks: List[StageCallback]
+    callbacks: List[Callback]
     stage_stack: List[Stage]
     _metric_names: Tuple[str, ...] = None
     _metric_names_set: Set[str] = None
 
-    def __init__(self, callbacks: Optional[Sequence[StageCallback]] = None):
+    def __init__(self, callbacks: Optional[Sequence[Callback]] = None):
         # check the Stage callbacks, and add a default LoggerCallback if
         # no such an instance is provided.
         callbacks = list(callbacks or ())
@@ -218,9 +221,11 @@ class KerasCallbackWrapper(keras.callbacks.Callback):
             self.stage_stack.append(
                 Stage(
                     type=StageType.VALIDATION,
-                    total_batches=dict_get(self.params, 'steps'),
-                    batch_size=dict_get(self.params, 'batch_size'),
-                    data_count=dict_get(self.params, 'samples'),
+                    # the following parameters, unfortunately, are the train
+                    # parameters, not the validation parameters.
+                    # total_batches=dict_get(self.params, 'steps'),
+                    # batch_size=dict_get(self.params, 'batch_size'),
+                    # data_count=dict_get(self.params, 'samples'),
                     callbacks=self.callbacks,
                     known_metrics=self._metric_names,
                 )

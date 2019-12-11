@@ -12,6 +12,7 @@ from typing import *
 import yaml
 
 from .utils import *
+from .type_check import *
 
 __all__ = [
     'ConfigValidationError', 'PatternType',
@@ -82,7 +83,7 @@ def field_checker(*fields, pre: bool = False):
     >>> validate_config(MyConfig(a=1, b='2', c=4.0))
     Traceback (most recent call last):
        ...
-    mltk.utils.type_check.TypeCheckError: caused by:
+    mltk.type_check.TypeCheckError: caused by:
     * ValueError: a + b != c
 
     Args:
@@ -127,7 +128,7 @@ def root_checker(pre: bool = False):
     >>> validate_config(MyConfig(a=1, b='2', c=4.0))
     Traceback (most recent call last):
        ...
-    mltk.utils.type_check.TypeCheckError: caused by:
+    mltk.type_check.TypeCheckError: caused by:
     * ValueError: a + b != c
 
     Args:
@@ -478,7 +479,7 @@ class Config(metaclass=ConfigMeta):
     >>> validate_config(MyConfig(a='12', b='34.5'))
     Traceback (most recent call last):
         ...
-    mltk.utils.type_check.TypeCheckError: at c: field 'c' is required, but its value is not specified
+    mltk.type_check.TypeCheckError: at c: field 'c' is required, but its value is not specified
 
     >>> validate_config(MyConfig(a='12', b='34.5', c='this'))
     MyConfig(a=12, b=34.5, c='this')
@@ -486,7 +487,7 @@ class Config(metaclass=ConfigMeta):
     >>> validate_config(MyConfig(a='12', b='34.5', c='invalid value'))
     Traceback (most recent call last):
         ...
-    mltk.utils.type_check.TypeCheckError: at c: invalid value for field 'c': not one of ['this', 'that']
+    mltk.type_check.TypeCheckError: at c: invalid value for field 'c': not one of ['this', 'that']
 
     By default, a subclass of :class:`Config` does not accept undefined fields,
     unless decorated by ``@config_params(undefined_fields=True)``, or a

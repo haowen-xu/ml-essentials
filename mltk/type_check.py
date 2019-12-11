@@ -12,7 +12,7 @@ from typing import *
 import numpy as np
 import yaml
 
-from .misc import NOT_SET, Singleton, deep_copy, PatternType
+from .utils import NOT_SET, Singleton, deep_copy, PatternType
 
 __all__ = [
     'TypeCheckError', 'TypeCheckContext',

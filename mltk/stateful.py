@@ -10,6 +10,7 @@ __all__ = [
 ]
 
 StateDict = Dict[str, Any]
+StatefulObjects = Union['StatefulObjectGroup', Dict[str, 'StatefulObject']]
 
 
 class StatefulObject(object):
@@ -193,7 +194,7 @@ class StateSaver(object):
     """
 
     def __init__(self,
-                 object_or_objects: Union[StatefulObject, StateDict],
+                 object_or_objects: StatefulObjects,
                  pickle_protocol=pkl.HIGHEST_PROTOCOL):
         """
         Construct a new :class:`StateSaver`.
