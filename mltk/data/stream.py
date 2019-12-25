@@ -1,3 +1,4 @@
+import warnings
 from logging import getLogger
 from queue import Queue
 from threading import Thread, Semaphore
@@ -5,7 +6,8 @@ from typing import *
 
 import numpy as np
 
-from ..utils import minibatch_slices_iterator, AutoInitAndCloseable, DocInherit
+from ..utils import (minibatch_slices_iterator, AutoInitAndCloseable, NOT_SET,
+                     GeneratorIterator)
 
 __all__ = [
     'DataStream', 'UserGeneratorDataStream',
@@ -14,7 +16,7 @@ __all__ = [
     'MapperDataStream', 'ThreadingDataStream',
 ]
 
-ArrayType = np.ndarray
+ArrayType = Union[np.ndarray, Any]
 TupleOfArrays = Tuple[ArrayType, ...]
 TupleOfShapes = Tuple[Tuple[int, ...], ...]
 IterableOfArrays = Iterable[ArrayType]
@@ -219,38 +221,49 @@ class DataStream(object):
             raise TypeError(f'`random_state` is not np.random.RandomState: '
                             f'{random_state!r}')
 
+        if data_length is not None and batch_size is not None:
+            batch_count = int((data_length + batch_size - 1) // batch_size)
+        else:
+            batch_count = None
+
         self._batch_size = batch_size
+        self._batch_count = batch_count
         self._array_count = array_count
         self._data_shapes = data_shapes
         self._data_length = data_length
         self._random_state = random_state
-        self._is_iter_entered = False
+        self._active_iterator = None
+        self._auto_close_iterator_warning_printed = False
 
-    def __iter__(self) -> Generator[TupleOfArrays, None, None]:
+    def __iter__(self) -> GeneratorIterator[TupleOfArrays]:
         """
         Iterate through the mini-batches.
 
-        Note this method is not re-entrant, i.e., you must not iterate through
-        a data stream when it is already being iterated.  For example, the
-        following code is prohibited:
-
-        >>> stream = DataStream.int_seq(5, batch_size=3)
-        >>> for [a] in stream:
-        ...     for [b] in stream:
-        ...         print(a + b)
-        Traceback (most recent call last):
-            ...
-        RuntimeError: IntSeqDataStream.__iter__ is not re-entrant.
+        Note if a previous iterator is not closed before obtaining a new one,
+        the previous iterator will be closed automatically, and a warning will
+        be printed to the console (for only once).
         """
-        if self._is_iter_entered:
-            raise RuntimeError(f'{self.__class__.__qualname__}.__iter__ '
-                               f'is not re-entrant.')
-        self._is_iter_entered = True
-        try:
-            for b in self._minibatch_iterator():
-                yield b
-        finally:
-            self._is_iter_entered = False
+        if self._active_iterator is not None:
+            self._active_iterator.close()
+            self._active_iterator = None
+            if not self._auto_close_iterator_warning_printed:
+                warnings.warn(
+                    f'Another iterator of the DataStream {self!r} is still '
+                    f'active, will close it automatically.  If you did not '
+                    f'exhaust the iterator, remember to call `close()` on it.',
+                    UserWarning,
+                )
+                self._auto_close_iterator_warning_printed = True
+
+        def make_generator():
+            g = self._minibatch_iterator()
+            try:
+                yield from g
+            finally:
+                self._active_iterator = None
+
+        self._active_iterator = GeneratorIterator(make_generator())
+        return self._active_iterator
 
     def __len__(self):
         """
@@ -269,6 +282,7 @@ class DataStream(object):
         Raises:
             RuntimeError: If a data stream cannot report this number,
                 i.e., `data_length` is None.
+
 
                 >>> def g():
                 ...     yield np.arange(3)
@@ -347,6 +361,20 @@ class DataStream(object):
         return self._data_length
 
     @property
+    def batch_count(self) -> Optional[int]:
+        """
+        Get the total number of batches in an epoch.
+
+        >>> stream = DataStream.int_seq(5, batch_size=3)
+        >>> stream.batch_count
+        2
+        >>> stream = DataStream.int_seq(5, batch_size=3, skip_incomplete=True)
+        >>> stream.batch_count
+        1
+        """
+        return self._batch_count
+
+    @property
     def random_state(self) -> Optional[RandomStateType]:
         """Get the NumPy random state associated with this data stream."""
         return self._random_state
@@ -418,27 +446,30 @@ class DataStream(object):
                 RuntimeError: empty data stream cannot be converted to arrays
         """
         arrays_buf = []
-        it = iter(self)
+        g = iter(self)
         try:
-            batch = next(it)
-        except StopIteration:
-            raise RuntimeError(
-                'empty data stream cannot be converted to arrays')
-        try:
-            arrays_buf = [[arr] for arr in batch]
-            while True:
-                batch = next(it)
-                for i, arr in enumerate(batch):
-                    arrays_buf[i].append(arr)
-        except StopIteration:
-            pass
-        return tuple(np.concatenate(arr) for arr in arrays_buf)
+            try:
+                batch = next(g)
+            except StopIteration:
+                raise RuntimeError(
+                    'empty data stream cannot be converted to arrays')
+            try:
+                arrays_buf = [[arr] for arr in batch]
+                while True:
+                    batch = next(g)
+                    for i, arr in enumerate(batch):
+                        arrays_buf[i].append(arr)
+            except StopIteration:
+                pass
+            return tuple(np.concatenate(arr) for arr in arrays_buf)
+        finally:
+            g.close()
 
     def to_arrays_stream(self,
-                         batch_size: int = ...,
+                         batch_size: int = NOT_SET,
                          shuffle: bool = False,
                          skip_incomplete: bool = False,
-                         random_state: Optional[RandomStateType] = ...
+                         random_state: Optional[RandomStateType] = NOT_SET
                          ) -> 'ArraysDataStream':
         """
         Convert this data-flow to an arrays stream.
@@ -489,12 +520,12 @@ class DataStream(object):
                     ...
                 ValueError: `batch_size` must be specified
         """
-        if batch_size is ...:
+        if batch_size is NOT_SET:
             batch_size = self.batch_size
         if batch_size is None:
             raise ValueError('`batch_size` must be specified')
 
-        if random_state is ...:
+        if random_state is NOT_SET:
             random_state = self.random_state
 
         return ArraysDataStream(
@@ -566,7 +597,7 @@ class DataStream(object):
                 step: int = None,
                 *,
                 dtype=np.int32,
-                batch_size: int = ...,
+                batch_size: int = NOT_SET,
                 shuffle: bool = False,
                 skip_incomplete: bool = False,
                 random_state: Optional[RandomStateType] = None
@@ -825,6 +856,28 @@ class DataStream(object):
             array_count=array_count
         )
 
+    def to_torch_tensors(self, device: Optional[str] = None
+                         ) -> 'MapperDataStream':
+        """
+        Converts NumPy arrays to PyTorch tensors.
+
+        Args:
+            device: The device where to place the tensors.
+
+        Returns:
+            A mapper :class:`DataStream` that converts batch NumPy
+            arrays to PyTorch tensors.
+        """
+        import torch
+        if device is not None:
+            def mapper(*args):
+                return tuple(torch.from_numpy(a).detach().to(device)
+                             for a in args)
+        else:
+            def mapper(*args):
+                return tuple(torch.from_numpy(a).detach() for a in args)
+        return self.map(mapper, preserve_shapes=True)
+
 
 class ArraysDataStream(DataStream):
     """NumPy arrays data stream."""
@@ -928,7 +981,7 @@ class IntSeqDataStream(DataStream):
                  step: int = None,
                  *,
                  dtype=np.int32,
-                 batch_size: int = ...,
+                 batch_size: int = NOT_SET,
                  shuffle: bool = False,
                  skip_incomplete: bool = False,
                  random_state: Optional[RandomStateType] = None):
@@ -948,7 +1001,7 @@ class IntSeqDataStream(DataStream):
 
         dtype = np.dtype(dtype)
 
-        if batch_size is ...:
+        if batch_size is NOT_SET:
             raise ValueError('`batch_size` is required.')
 
         # construct the int sequence
@@ -1076,8 +1129,13 @@ class GeneratorFactoryDataStream(UserGeneratorDataStream):
         return self._factory
 
     def _minibatch_iterator(self):
-        for batch in self._factory():
-            yield self._validate_batch(batch)
+        g = self._factory()
+        try:
+            for batch in g:
+                yield self._validate_batch(batch)
+        finally:
+            if hasattr(g, 'close'):  # pragma: no cover
+                g.close()
 
     def copy(self, **kwargs):
         return self._copy_helper((), factory=self.factory, **kwargs)
@@ -1088,7 +1146,7 @@ class GatherDataStream(DataStream):
 
     def __init__(self,
                  streams: Iterable[DataStream],
-                 random_state: Optional[RandomStateType] = ...):
+                 random_state: Optional[RandomStateType] = NOT_SET):
         # validate the streams
         streams = tuple(streams)
         if not streams:
@@ -1100,15 +1158,15 @@ class GatherDataStream(DataStream):
                                 f'instance of DataStream: {stream}.')
 
         # inspect the properties of the data streams
-        batch_size = ...
+        batch_size = NOT_SET
         array_count = 0
         data_shapes = []
-        data_length = ...
+        data_length = NOT_SET
 
         for i, stream in enumerate(streams):
             # check the batch size
             if stream.batch_size is not None:
-                if batch_size is ...:
+                if batch_size is NOT_SET:
                     batch_size = stream.batch_size
                 elif batch_size != stream.batch_size:
                     raise ValueError(
@@ -1134,7 +1192,7 @@ class GatherDataStream(DataStream):
 
             # check the data length
             if stream.data_length is not None:
-                if data_length is ...:
+                if data_length is NOT_SET:
                     data_length = stream.data_length
                 elif data_length != stream.data_length:
                     raise ValueError(
@@ -1145,19 +1203,19 @@ class GatherDataStream(DataStream):
                     )
 
             # check the random state
-            if stream.random_state is not None and random_state is ...:
+            if stream.random_state is not None and random_state is NOT_SET:
                 random_state = stream.random_state
 
-        if batch_size is ...:
+        if batch_size is NOT_SET:
             batch_size = None
 
         if data_shapes is not None:
             data_shapes = tuple(data_shapes)
 
-        if data_length is ...:
+        if data_length is NOT_SET:
             data_length = None
 
-        if random_state is ...:
+        if random_state is NOT_SET:
             random_state = None
 
         # construct the instance
@@ -1177,8 +1235,14 @@ class GatherDataStream(DataStream):
         return self._streams
 
     def _minibatch_iterator(self):
-        for batches in zip(*self._streams):
-            yield sum([tuple(b) for b in batches], ())
+        iterators = [iter(s) for s in self._streams]
+        try:
+            for batches in zip(*iterators):
+                yield sum([tuple(b) for b in batches], ())
+        finally:
+            for i in iterators:
+                if hasattr(i, 'close'):  # pragma: no cover
+                    i.close()
 
     def copy(self, **kwargs):
         return self._copy_helper(('random_state',), streams=self.streams, **kwargs)
@@ -1190,35 +1254,35 @@ class MapperDataStream(UserGeneratorDataStream):
     def __init__(self,
                  source: DataStream,
                  mapper: TMapper,
-                 batch_size: Optional[int] = ...,
-                 array_count: Optional[int] = ...,
-                 data_shapes: Optional[TupleOfShapes] = ...,
-                 data_length: Optional[int] = ...,
-                 random_state: Optional[RandomStateType] = ...,
+                 batch_size: Optional[int] = NOT_SET,
+                 array_count: Optional[int] = NOT_SET,
+                 data_shapes: Optional[TupleOfShapes] = NOT_SET,
+                 data_length: Optional[int] = NOT_SET,
+                 random_state: Optional[RandomStateType] = NOT_SET,
                  preserve_shapes: bool = False):
         # validate the arguments
         if not isinstance(source, DataStream):
             raise TypeError(f'`source` is not a DataStream: {source!r}')
 
-        if batch_size is ...:
+        if batch_size is NOT_SET:
             batch_size = source.batch_size
 
-        if array_count is ...:
+        if array_count is NOT_SET:
             if preserve_shapes:
                 array_count = source.array_count
             else:
                 array_count = None
 
-        if data_shapes is ...:
+        if data_shapes is NOT_SET:
             if preserve_shapes:
                 data_shapes = source.data_shapes
             else:
                 data_shapes = None
 
-        if data_length is ...:
+        if data_length is NOT_SET:
             data_length = source.data_length
 
-        if random_state is ...:
+        if random_state is NOT_SET:
             random_state = source.random_state
 
         super().__init__(
@@ -1238,9 +1302,13 @@ class MapperDataStream(UserGeneratorDataStream):
         return self._source
 
     def _minibatch_iterator(self):
-        for batch in self._source:
-            yield self._validate_batch(
-                self._mapper(*ensure_batch_is_tuple(batch)))
+        g = iter(self._source)
+        try:
+            for batch in g:
+                yield self._validate_batch(
+                    self._mapper(*ensure_batch_is_tuple(batch)))
+        finally:
+            g.close()
 
     def copy(self, **kwargs):
         return self._copy_helper(
@@ -1313,10 +1381,14 @@ class ThreadingDataStream(DataStream, AutoInitAndCloseable):
         try:
             while not self._stopping:
                 # iterate through the mini-batches in the current epoch
-                for batch in self.source:
-                    if self._stopping or active_epoch < self._epoch_counter:
-                        break
-                    self._batch_queue.put((active_epoch, batch))
+                g = iter(self.source)
+                try:
+                    for batch in g:
+                        if self._stopping or active_epoch < self._epoch_counter:
+                            break
+                        self._batch_queue.put((active_epoch, batch))
+                finally:
+                    g.close()
 
                 # put the epoch ending mark into the queue
                 if not self._stopping:

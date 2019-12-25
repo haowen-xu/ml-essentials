@@ -1,4 +1,4 @@
-from datetime import timedelta
+from datetime import timedelta, datetime
 from typing import *
 
 import numpy as np
@@ -10,7 +10,8 @@ from .utils import NOT_SET
 
 
 __all__ = [
-    'format_key_values', 'format_duration', 'MetricsFormatter',
+    'format_key_values', 'format_duration', 'format_as_asctime',
+    'MetricsFormatter',
 ]
 
 KeyValuesType = Union[Dict, Config, Iterable[Tuple[str, Any]]]
@@ -100,44 +101,78 @@ def format_key_values(key_values: KeyValuesType,
 
 
 def format_duration(duration: DurationType,
-                    precision: int = 0) -> str:
+                    precision: int = 0,
+                    count_down: bool = False) -> str:
     """
     Format given time duration as human readable text.
 
     >>> format_duration(0)
     '0s'
+    >>> format_duration(0, count_down=True)
+    '0s'
     >>> format_duration(-1)
+    '1s ago'
+    >>> format_duration(-1, count_down=True)
     '1s ago'
     >>> format_duration(0.01, precision=2)
     '0.01s'
+    >>> format_duration(0.01, precision=2, count_down=True)
+    '0.01s'
     >>> format_duration(1.00, precision=2)
+    '1s'
+    >>> format_duration(1.00, precision=2, count_down=True)
     '1s'
     >>> format_duration(1.125)
     '1s'
+    >>> format_duration(1.125, count_down=True)
+    '1s'
     >>> format_duration(1.1251, precision=2)
+    '1.13s'
+    >>> format_duration(1.1251, precision=2, count_down=True)
     '1.13s'
     >>> format_duration(1.51)
     '2s'
+    >>> format_duration(1.51, count_down=True)
+    '2s'
     >>> format_duration(59.99, precision=2)
     '59.99s'
+    >>> format_duration(59.99, precision=2, count_down=True)
+    '59.99s'
     >>> format_duration(59.99)
+    '1m'
+    >>> format_duration(59.99, count_down=True)
     '1:00'
     >>> format_duration(60)
+    '1m'
+    >>> format_duration(60, count_down=True)
     '1:00'
     >>> format_duration(61)
+    '1m 1s'
+    >>> format_duration(61, count_down=True)
     '1:01'
     >>> format_duration(3600)
+    '1h'
+    >>> format_duration(3600, count_down=True)
     '1:00:00'
     >>> format_duration(86400)
+    '1d'
+    >>> format_duration(86400, count_down=True)
     '1d 00:00:00'
     >>> format_duration(86400 + 7200 + 180 + 4)
+    '1d 2h 3m 4s'
+    >>> format_duration(86400 + 7200 + 180 + 4, count_down=True)
     '1d 02:03:04'
     >>> format_duration(timedelta(days=1, hours=2, minutes=3, seconds=4))
+    '1d 2h 3m 4s'
+    >>> format_duration(timedelta(days=1, hours=2, minutes=3, seconds=4),
+    ...                 count_down=True)
     '1d 02:03:04'
 
     Args:
         duration: The number of seconds, or a :class:`timedelta` object.
         precision: Precision of the seconds (i.e., number of digits to print).
+        count_down: Whether or not to use the "count-down" format?  (i.e.,
+            time will be formatted as "__:__:__" instead of "__h __m __s".)
 
     Returns:
         The formatted text.
@@ -149,49 +184,72 @@ def format_duration(duration: DurationType,
     is_ago = duration < 0
     duration = round(abs(duration), precision)
 
-    def format_time(seconds, pop_leading_zero):
-        # first of all, extract the hours and minutes part
-        residual = []
-        for unit in (3600, 60):
-            residual.append(int(seconds // unit))
-            seconds = seconds - residual[-1] * unit
+    if count_down:
+        # format the time str as "__:__:__.__"
+        def format_time(seconds, has_days_part):
+            # first of all, extract the hours and minutes part
+            residual = []
+            for unit in (3600, 60):
+                residual.append(int(seconds // unit))
+                seconds = seconds - residual[-1] * unit
 
-        # format the hours and minutes
-        segments = []
-        for r in residual:
-            if not segments and pop_leading_zero:
-                if r != 0:
-                    segments.append(str(r))
+            # format the hours and minutes
+            segments = []
+            for r in residual:
+                if not segments and not has_days_part:
+                    if r != 0:
+                        segments.append(str(r))
+                else:
+                    segments.append(f'{r:02d}')
+
+            # break seconds into int and real number part
+            seconds_int = int(seconds)
+            seconds_real = seconds - seconds_int
+
+            # format the seconds
+            if segments:
+                seconds_int = f'{seconds_int:02d}'
             else:
-                segments.append(f'{r:02d}')
+                seconds_int = str(seconds_int)
+            seconds_real = f'{seconds_real:.{precision}f}'.strip('0')
+            if seconds_real == '.':
+                seconds_real = ''
+            seconds_suffix = 's' if not segments else ''
+            segments.append(f'{seconds_int}{seconds_real}{seconds_suffix}')
 
-        # break seconds into int and real number part
-        seconds_int = int(seconds)
-        seconds_real = seconds - seconds_int
+            # now compose the final time str
+            return ':'.join(segments)
+    else:
+        # format the time as "__h __m __s"
+        def format_time(seconds, has_days_part):
+            ret = []
+            for u, s in [(3600, 'h'), (60, 'm')]:
+                if seconds >= u:
+                    v = int(seconds // u)
+                    seconds -= v * u
+                    ret.append(f'{v}{s}')
+            if seconds > 1e-8:
+                # seconds_int = int(seconds)
+                seconds_str = f'{seconds:.{precision}f}'
+                seconds_str = seconds_str.rstrip('0').rstrip('.')
+                ret.append(f'{seconds_str}s')
 
-        # format the seconds
-        if segments:
-            seconds_int = f'{seconds_int:02d}'
-        else:
-            seconds_int = str(seconds_int)
-        seconds_real = f'{seconds_real:.{precision}f}'.strip('0')
-        if seconds_real == '.':
-            seconds_real = ''
-        seconds_suffix = 's' if not segments else ''
-        segments.append(f'{seconds_int}{seconds_real}{seconds_suffix}')
+            if not has_days_part and not ret:
+                ret.append('0s')
 
-        # now compose the final time str
-        return ':'.join(segments)
+            return ' '.join(ret)
 
     if duration < 86400:
-        # less then one day, just format the time str as "__:__:__.__"
-        ret = format_time(duration, pop_leading_zero=True)
+        # less then one day, just format the time
+        ret = format_time(duration, has_days_part=False)
     else:
-        # equal or more than one day, format as "__d __:__:__.__"
+        # equal or more than one day, format the days and the time
         days = int(duration // 86400)
         duration = duration - days * 86400
-        time_str = format_time(duration, pop_leading_zero=False)
-        ret = f'{days}d {time_str}'
+        time_str = format_time(duration, has_days_part=True)
+        if time_str:
+            time_str = ' ' + time_str
+        ret = f'{days}d{time_str}'
 
     if is_ago:
         ret = f'{ret} ago'
@@ -199,16 +257,51 @@ def format_duration(duration: DurationType,
     return ret
 
 
-class MetricsFormatter(object):
+def format_as_asctime(dt: datetime) -> str:
+    """
+    Format datetime `dt` using the `asctime` format of the logging module.
 
-    DELIMETERS: Tuple[str, str] = (': ', '; ')
+    >>> format_as_asctime(datetime.fromtimestamp(1576755571.662434))
+    '2019-12-19 19:39:31,662'
+
+    Args:
+        dt: The datetime object.
+
+    Returns:
+        The formatted datetime.
+    """
+    msec = int(round(dt.microsecond / 1000))
+    datetime_str = dt.strftime('%Y-%m-%d %H:%M:%S')
+    msec_str = f'{msec:03d}'
+    return f'{datetime_str},{msec_str}'
+
+
+class MetricsFormatter(object):
+    """
+    Class to sort and format metric statistics into string.
+
+    >>> fmt = MetricsFormatter()
+    >>> fmt.format({
+    ...     'val_loss': 1.25,
+    ...     'train_loss': {'mean': 1.333333333333, 'std': 0.6666666666667},
+    ...     'train_time': MetricStats(mean=2, var=2, std=1.4142135623730951),
+    ... })
+    'train_loss: 1.33333 (±0.666667); val_loss: 1.25; train_time: 2s (±1.414s)'
+    """
+
+    SEPARATORS: Tuple[str, str] = (': ', '; ')
+    """
+    Default separators, where the first is the separator between the 
+    name of a metric and its value, and the second is the separator between
+    different metrics.
+    """
 
     def _metric_sort_key(self, name):
         parts = name.split('_')
         prefix_order = {'train': 0, 'val': 1, 'valid': 2, 'test': 3,
-                        'predict': 4, 'epoch': 5, 'batch': 6}
-        suffix_order = {'time': -1, 'timer': -1}
-        return (prefix_order.get(parts[0], 0), suffix_order.get(parts[-1], 0),
+                        'pred': 4, 'predict': 5, 'epoch': 6, 'batch': 7}
+        suffix_order = {'time': 9998, 'timer': 9999}
+        return (suffix_order.get(parts[-1], 0), prefix_order.get(parts[0], 0),
                 name)
 
     def _format_value(self, name: str, val: Any) -> str:
@@ -221,10 +314,46 @@ class MetricsFormatter(object):
         else:
             return str(val)
 
-    def sorted_names(self, names: Sequence[str]) -> List[str]:
+    def sorted_names(self, names: Iterable[str]) -> List[str]:
+        """
+        Sort the metric names.
+
+        Args:
+            names: The metric names.
+
+        Returns:
+            The sorted metric names.
+        """
         return sorted(names, key=self._metric_sort_key)
 
-    def format_metric(self, name: str, val: Any, sep: str) -> str:
+    def format_metric(self, name: str, val: Any, sep: str = NOT_SET) -> str:
+        """
+        Format a named metric.
+
+        >>> fmt = MetricsFormatter()
+        >>> fmt.format_metric('loss', 1.25, ': ')
+        'loss: 1.25'
+        >>> fmt.format_metric('acc', {'mean': 0.875, 'std': 0.125}, ' = ')
+        'acc = 0.875 (±0.125)'
+        >>> fmt.format_metric('epoch_time', MetricStats(mean=2.5, std=1, var=1))
+        'epoch_time: 2.5s (±1s)'
+        >>> fmt.format_metric('value', {'mean': np.array([1, 2]), 'std': None})
+        'value: [1 2]'
+
+        Args:
+            name: Name of the metric.
+            val: Value of the metric, may be a number, a dict of
+                ``{'mean': ..., 'std': ...}``, or an instance of
+                :class:`MetricStats`.
+            sep: The separator between the name and the value.
+                If not specified, use ``self.DELIMIETERS[0]``.
+
+        Returns:
+            The formatted metric.
+        """
+        if sep is NOT_SET:
+            sep = self.SEPARATORS[0]
+
         # if `val` is a dict with "mean" and "std"
         if isinstance(val, dict) and 'mean' in val and \
                 (len(val) == 1 or (len(val) == 2 and 'std' in val)):
@@ -249,12 +378,33 @@ class MetricsFormatter(object):
     def format(self,
                metrics: Mapping[str, MetricValueType],
                known_names: Optional[Sequence[str]] = None,
-               delimeters: Tuple[str, str] = NOT_SET) -> str:
-        if delimeters is NOT_SET:
-            delimeters = self.DELIMETERS
+               sep: Tuple[str, str] = NOT_SET) -> str:
+        """
+        Format the given metrics.
+
+        >>> fmt = MetricsFormatter()
+        >>> fmt.format({
+        ...     'acc': 0.75, 'loss': {'mean': 0.875, 'std': 0.125},
+        ...     'train_time': 1.5
+        ... }, known_names=['loss'], sep=(' = ', ' | '))
+        'loss = 0.875 (±0.125) | acc = 0.75 | train_time = 1.5s'
+
+        Args:
+            metrics: A dict of metric values or statistics.
+            known_names: Known metric names.  These metrics will be placed
+                in front of other unknown metrics.
+            sep: The first str is the separator between a name of metric
+                and its value, while the second str is the separator
+                between different metrics.  Defaults to ``self.SEPARATORS``.
+
+        Returns:
+            The formatted metrics.
+        """
+        if sep is NOT_SET:
+            sep = self.SEPARATORS
 
         buf = []
-        name_val_sep, metrics_sep = delimeters
+        name_val_sep, metrics_sep = sep
         fmt = lambda name: self.format_metric(name, metrics[name], name_val_sep)
 
         # format the metrics with known names (thus preserving the known orders)

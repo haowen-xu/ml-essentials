@@ -9,7 +9,7 @@ from mltk.metrics import *
 class MetricCollectorTestCase(unittest.TestCase):
 
     def test_empty_scalar(self):
-        collector = MetricCollector()
+        collector = GeneralMetricCollector()
         self.assertEqual(collector.shape, ())
         self.assertIsNone(collector.stats)
         self.assertFalse(collector.has_stats)
@@ -19,7 +19,7 @@ class MetricCollectorTestCase(unittest.TestCase):
         self.assertEqual(collector.weight_sum, 0.)
 
     def test_empty_vector(self):
-        collector = MetricCollector(shape=(3, 2))
+        collector = GeneralMetricCollector(shape=(3, 2))
         self.assertEqual(collector.shape, (3, 2))
         self.assertFalse(collector.has_stats)
         self.assertEqual(collector.counter, 0)
@@ -28,7 +28,7 @@ class MetricCollectorTestCase(unittest.TestCase):
         self.assertEqual(collector.weight_sum, 0.)
 
     def test_scalar_collect(self):
-        collector = MetricCollector()
+        collector = GeneralMetricCollector()
         collector.update([2, 1, 7, 6])
         self.assertTrue(collector.has_stats)
         self.assertEqual(collector.counter, 4)
@@ -38,14 +38,14 @@ class MetricCollectorTestCase(unittest.TestCase):
         self.assertAlmostEqual(collector.weight_sum, 4.)
 
     def test_var_std(self):
-        collector = MetricCollector()
+        collector = GeneralMetricCollector()
         collector.update([2, 1, 7, 6])
         self.assertEqual(collector.counter, 4)
         self.assertAlmostEqual(collector.stats.var, 6.5)
         self.assertAlmostEqual(collector.stats.std, 2.549509756796)
 
     def test_scalar_multi_collect(self):
-        collector = MetricCollector()
+        collector = GeneralMetricCollector()
         collector.update(2)
         collector.update(1, weight=3)
         collector.update(7, weight=6)
@@ -56,7 +56,7 @@ class MetricCollectorTestCase(unittest.TestCase):
         self.assertAlmostEqual(collector.weight_sum, 10.)
 
     def test_reset(self):
-        collector = MetricCollector()
+        collector = GeneralMetricCollector()
         collector.update([2, 1, 7, 6])
         collector.reset()
         self.assertFalse(collector.has_stats)
@@ -67,7 +67,7 @@ class MetricCollectorTestCase(unittest.TestCase):
         self.assertIsNone(collector.stats)
 
     def test_scalar_collect_batch(self):
-        collector = MetricCollector()
+        collector = GeneralMetricCollector()
         collector.update([2, 1, 7], weight=[1, 3, 6])
         self.assertTrue(collector.has_stats)
         self.assertEqual(collector.counter, 3)
@@ -77,7 +77,7 @@ class MetricCollectorTestCase(unittest.TestCase):
         self.assertAlmostEqual(collector.weight_sum, 10.)
 
     def test_scalar_collect_batch_weight_broadcast(self):
-        collector = MetricCollector()
+        collector = GeneralMetricCollector()
         collector.update([2, 1, 7, 6], weight=1.)
         self.assertTrue(collector.has_stats)
         self.assertEqual(collector.counter, 4)
@@ -87,7 +87,7 @@ class MetricCollectorTestCase(unittest.TestCase):
         self.assertAlmostEqual(collector.weight_sum, 4.)
 
     def test_vector_collect(self):
-        collector = MetricCollector(shape=(3, 2))
+        collector = GeneralMetricCollector(shape=(3, 2))
         arr = np.arange(6).reshape([3, 2])
         collector.update(arr)
         self.assertTrue(collector.has_stats)
@@ -98,7 +98,7 @@ class MetricCollectorTestCase(unittest.TestCase):
         self.assertAlmostEqual(collector.weight_sum, 1.)
 
     def test_vector_multi_collect(self):
-        collector = MetricCollector(shape=(3, 2))
+        collector = GeneralMetricCollector(shape=(3, 2))
         arr = np.arange(24).reshape([4, 3, 2])
         collector.update(arr[0])
         collector.update(arr[1], weight=2)
@@ -125,7 +125,7 @@ class MetricCollectorTestCase(unittest.TestCase):
         self.assertAlmostEqual(collector.weight_sum, 10.)
 
     def test_vector_collect_batch(self):
-        collector = MetricCollector(shape=(3, 2))
+        collector = GeneralMetricCollector(shape=(3, 2))
         arr = np.arange(24).reshape([4, 3, 2])
         collector.update(arr, weight=[1, 2, 3, 4])
         self.assertTrue(collector.has_stats)
@@ -141,7 +141,7 @@ class MetricCollectorTestCase(unittest.TestCase):
         self.assertAlmostEqual(collector.weight_sum, 10.)
 
     def test_vector_collect_batch_weight_broadcast(self):
-        collector = MetricCollector(shape=(3, 2))
+        collector = GeneralMetricCollector(shape=(3, 2))
         arr = np.arange(24).reshape([4, 3, 2])
         collector.update(arr, weight=1.)
         self.assertTrue(collector.has_stats)
@@ -157,7 +157,7 @@ class MetricCollectorTestCase(unittest.TestCase):
         self.assertAlmostEqual(collector.weight_sum, 4.)
 
     def test_collect_empty(self):
-        collector = MetricCollector()
+        collector = GeneralMetricCollector()
         collector.update([])
         self.assertEqual(collector.shape, ())
         self.assertFalse(collector.has_stats)
@@ -168,7 +168,7 @@ class MetricCollectorTestCase(unittest.TestCase):
         self.assertIsNone(collector.stats)
 
     def test_collect_empty_weight(self):
-        collector = MetricCollector()
+        collector = GeneralMetricCollector()
         collector.update([2, 1, 7, 6], weight=[])
         self.assertTrue(collector.has_stats)
         self.assertEqual(collector.counter, 4)
@@ -178,7 +178,7 @@ class MetricCollectorTestCase(unittest.TestCase):
         self.assertAlmostEqual(collector.weight_sum, 4.)
 
     def test_shape_mismatch(self):
-        collector = MetricCollector(shape=(3, 2))
+        collector = GeneralMetricCollector(shape=(3, 2))
         with pytest.raises(
                 ValueError,
                 match=r'Shape mismatch: \(3,\) not ending with \(3, 2\)'):

@@ -5,28 +5,45 @@ import zipfile
 from contextlib import contextmanager
 from typing import *
 
+from mltk.callbacks import CallbackData
 from mltk.utils import NOT_SET
 
 __all__ = [
-    'slow_test', 'remote_test',
+    'slow_test', 'remote_test', 'pytorch_test',
     'get_file_content', 'write_file_content', 'dir_snapshot',
     'prepare_dir', 'zip_snapshot', 'chdir_context', 'set_environ_context',
-    'compute_fs_size_and_inode',
+    'compute_fs_size_and_inode', 'new_callback_data',
 ]
 
 FAST = os.environ.get('FAST_TEST', '0') == '1'
 LOCAL = os.environ.get('LOCAL_TEST', '0') == '1'
 
+try:
+    import torch
+except ImportError:
+    HAS_PYTORCH = False
+else:
+    HAS_PYTORCH = True
+
 
 def slow_test(method):
     return unittest.skipIf(
-        FAST, 'slow tests are skipped in fast test mode')(method)
+        FAST, 'slow tests are skipped in fast test mode'
+    )(method)
 
 
 def remote_test(method):
     return unittest.skipIf(
         FAST or LOCAL,
-        'remote tests are skipped in fast test and local test mode')(method)
+        'remote tests are skipped in fast test and local test mode'
+    )(method)
+
+
+def pytorch_test(method):
+    return unittest.skipUnless(
+        HAS_PYTORCH,
+        'PyTorch is installed'
+    )(method)
 
 
 def get_file_content(path):
@@ -132,3 +149,9 @@ def compute_fs_size_and_inode(path):
             return st.st_size, 1
     except IOError:
         return 0, 0
+
+
+def new_callback_data(**kwargs):
+    for field in CallbackData.__slots__:
+        kwargs.setdefault(field, None)
+    return CallbackData(**kwargs)

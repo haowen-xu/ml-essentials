@@ -1,5 +1,6 @@
 import time
 import unittest
+import warnings
 
 import numpy as np
 import pytest
@@ -9,7 +10,7 @@ from mltk.data import *
 # Do not delete the following line!
 # It checks whether DataStream is exposed to the root package.
 from mltk import DataStream
-from tests.helpers import slow_test
+from tests.helpers import slow_test, pytorch_test
 
 
 class DataStreamTestCase(unittest.TestCase):
@@ -88,6 +89,31 @@ class DataStreamTestCase(unittest.TestCase):
             for _ in stream:
                 pass
 
+    @pytorch_test
+    def test_to_torch_tensors(self):
+        import torch
+
+        x = np.random.normal(size=[5, 4])
+        y = np.random.normal(size=[5, 2, 3])
+        stream = DataStream.arrays([x, y], batch_size=3)
+
+        stream2 = stream.to_torch_tensors()
+        stream3 = stream.to_torch_tensors('cpu')
+
+        for s in (stream2, stream3):
+            self.assertEqual(s.batch_size, stream.batch_size)
+            self.assertEqual(s.array_count, stream.array_count)
+            self.assertEqual(s.data_shapes, stream.data_shapes)
+            self.assertEqual(s.data_length, stream.data_length)
+            self.assertEqual(s.batch_count, stream.batch_count)
+            for i, [batch_x, batch_y] in enumerate(s):
+                self.assertIsInstance(batch_x, torch.Tensor)
+                self.assertIsInstance(batch_y, torch.Tensor)
+                np.testing.assert_equal(batch_x.detach().numpy(),
+                                        x[i * 3: (i + 1) * 3])
+                np.testing.assert_equal(batch_y.detach().numpy(),
+                                        y[i * 3: (i + 1) * 3])
+
 
 class ArraysDataStreamTestCase(unittest.TestCase):
 
@@ -125,6 +151,7 @@ class ArraysDataStreamTestCase(unittest.TestCase):
         self.assertEqual(stream.data_length, 5)
         self.assertIsNone(stream.random_state)
         self.assertEqual(stream.batch_size, 3)
+        self.assertEqual(stream.batch_count, 2)
         self.assertFalse(stream.shuffle)
         self.assertFalse(stream.skip_incomplete)
 
@@ -137,6 +164,7 @@ class ArraysDataStreamTestCase(unittest.TestCase):
         self.assertEqual(stream.data_length, 3)
         self.assertIs(stream.random_state, rs)
         self.assertEqual(stream.batch_size, 3)
+        self.assertEqual(stream.batch_count, 1)
         self.assertTrue(stream.shuffle)
         self.assertTrue(stream.skip_incomplete)
 
@@ -182,6 +210,7 @@ class IntSeqDataStreamTestCase(unittest.TestCase):
         self.assertEqual(stream.step, 1)
         self.assertEqual(stream.dtype, np.int32)
         self.assertEqual(stream.batch_size, 3)
+        self.assertEqual(stream.batch_count, 2)
         self.assertEqual(stream.array_count, 1)
         self.assertEqual(stream.data_shapes, ((),))
         self.assertEqual(stream.data_length, 5)
@@ -200,6 +229,7 @@ class IntSeqDataStreamTestCase(unittest.TestCase):
         self.assertEqual(stream.step, 2)
         self.assertEqual(stream.dtype, np.int64)
         self.assertEqual(stream.batch_size, 3)
+        self.assertEqual(stream.batch_count, 1)
         self.assertEqual(stream.array_count, 1)
         self.assertEqual(stream.data_shapes, ((),))
         self.assertEqual(stream.data_length, 3)
@@ -346,6 +376,7 @@ class GatherDataStreamTestCase(unittest.TestCase):
         self.assertEqual(stream.data_shapes, ((1,), (2,), (3,)))
         self.assertEqual(stream.data_length, 5)
         self.assertEqual(stream.array_count, 3)
+        self.assertEqual(stream.batch_count, 2)
         self.assertIs(stream.random_state, rs)
 
         arrays = stream.get_arrays()
@@ -410,6 +441,7 @@ class MapperDataStreamTestCase(unittest.TestCase):
         self.assertIs(mapped.source, source)
         self.assertEqual(mapped.data_length, 5)
         self.assertEqual(mapped.batch_size, 3)
+        self.assertEqual(mapped.batch_count, 2)
         self.assertIsNone(mapped.array_count)
         self.assertIsNone(mapped.data_shapes)
         self.assertIs(mapped.random_state, rs)
@@ -417,6 +449,7 @@ class MapperDataStreamTestCase(unittest.TestCase):
         mapped = MapperDataStream(source, identity, preserve_shapes=True)
         self.assertEqual(mapped.data_length, 5)
         self.assertEqual(mapped.batch_size, 3)
+        self.assertEqual(mapped.batch_count, 2)
         self.assertEqual(mapped.array_count, 2)
         self.assertEqual(mapped.data_shapes, ((1,), (2,)))
         self.assertIs(mapped.random_state, rs)
@@ -435,6 +468,7 @@ class MapperDataStreamTestCase(unittest.TestCase):
         )
         self.assertEqual(mapped.data_length, 11)
         self.assertEqual(mapped.batch_size, 7)
+        self.assertEqual(mapped.batch_count, 2)
         self.assertEqual(mapped.array_count, 1)
         self.assertEqual(mapped.data_shapes, ((3,),))
         self.assertIs(mapped.random_state, rs2)
@@ -481,6 +515,7 @@ class ThreadingDataStreamTestCase(unittest.TestCase):
         self.assertIs(stream.source, source)
         self.assertEqual(stream.prefetch, 3)
         self.assertEqual(stream.batch_size, 3)
+        self.assertEqual(stream.batch_count, 2)
         self.assertEqual(stream.array_count, 2)
         self.assertIs(stream.random_state, rs)
         self.assertEqual(stream.data_length, 5)
@@ -581,6 +616,58 @@ class ThreadingDataStreamTestCase(unittest.TestCase):
             for i, (a,) in enumerate(flow):
                 self.assertTrue((560 + i * 2 == a[0]) or (660 + i * 2 == a[0]))
                 self.assertTrue((561 + i * 2 == a[1]) or (661 + i * 2 == a[1]))
+
+    def test_iter_reentrant_warn(self):
+        stream = DataStream.int_seq(5, batch_size=3)
+
+        # test open and close, no warning
+        iterator = iter(stream)
+        np.testing.assert_equal(next(iterator)[0], [0, 1, 2])
+        iterator.close()
+
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter('always')
+            batches = list(stream)
+            self.assertEqual(len(batches), 2)
+            np.testing.assert_equal(batches[0][0], [0, 1, 2])
+            np.testing.assert_equal(batches[1][0], [3, 4])
+
+        self.assertEqual(len(w), 0)
+
+        # test open without close, cause warning
+        iterator = iter(stream)
+        np.testing.assert_equal(next(iterator)[0], [0, 1, 2])
+
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter('always')
+            batches = list(stream)
+            self.assertEqual(len(batches), 2)
+            np.testing.assert_equal(batches[0][0], [0, 1, 2])
+            np.testing.assert_equal(batches[1][0], [3, 4])
+
+        self.assertEqual(len(w), 1)
+        self.assertTrue(issubclass(w[-1].category, UserWarning))
+        self.assertRegex(
+            str(w[-1].message),
+            r'Another iterator of the DataStream .* is still active, '
+            r'will close it automatically.'
+        )
+
+        with pytest.raises(StopIteration):
+            _ = next(iterator)  # this iterator should have been closed
+
+        # test no warning the second time
+        iterator = iter(stream)
+        np.testing.assert_equal(next(iterator)[0], [0, 1, 2])
+
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter('always')
+            batches = list(stream)
+            self.assertEqual(len(batches), 2)
+            np.testing.assert_equal(batches[0][0], [0, 1, 2])
+            np.testing.assert_equal(batches[1][0], [3, 4])
+
+        self.assertEqual(len(w), 0)
 
     def test_auto_init(self):
         epoch_counter = [0]

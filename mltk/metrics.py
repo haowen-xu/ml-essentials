@@ -1,5 +1,8 @@
 # -*- coding: utf-8 -*-
+import math
+import operator
 from dataclasses import dataclass
+from functools import reduce
 from typing import *
 
 import numpy as np
@@ -7,7 +10,11 @@ import numpy as np
 
 RealValue = Union[float, np.ndarray]
 
-__all__ = ['MetricStats', 'MetricCollector', 'ScalarMetricsLogger']
+__all__ = [
+    'MetricStats',
+    'MetricCollector', 'GeneralMetricCollector',
+    'ScalarMetricCollector', 'ScalarMetricsLogger',
+]
 
 
 @dataclass
@@ -44,12 +51,61 @@ class MetricStats(object):
 
 
 class MetricCollector(object):
+    """Base class of a metric statistics collector."""
+
+    def reset(self):
+        """Reset the collector to initial state."""
+        raise NotImplementedError()
+
+    @property
+    def has_stats(self) -> bool:
+        """Whether or not any value has been collected?"""
+        raise NotImplementedError()
+
+    @property
+    def stats(self) -> Optional[MetricStats]:
+        """
+        Get the metric object.
+
+        Returns:
+             The statistics, or :obj:`None` if no value has been collected.
+        """
+        raise NotImplementedError()
+
+    def update(self, values: RealValue, weight: RealValue = 1.):
+        """
+        Update the metric statistics from values.
+
+        This method uses the following equation to update `mean` and `square`:
+
+        .. math::
+            \\frac{\\sum_{i=1}^n w_i f(x_i)}{\\sum_{j=1}^n w_j} =
+                \\frac{\\sum_{i=1}^m w_i f(x_i)}{\\sum_{j=1}^m w_j} +
+                \\frac{\\sum_{i=m+1}^n w_i}{\\sum_{j=1}^n w_j} \\Bigg(
+                    \\frac{\\sum_{i=m+1}^n w_i f(x_i)}{\\sum_{j=m+1}^n w_j} -
+                    \\frac{\\sum_{i=1}^m w_i f(x_i)}{\\sum_{j=1}^m w_j}
+                \\Bigg)
+
+        Args:
+            values: Values to be collected in batch, numpy array or scalar
+                whose shape ends with ``self.shape``. The leading shape in
+                front of ``self.shape`` is regarded as the batch shape.
+            weight: Weights of the `values`, should be broadcastable against
+                the batch shape. (default is 1)
+
+        Raises:
+            ValueError: If the shape of `values` does not end with `self.shape`.
+        """
+        raise NotImplementedError()
+
+
+class GeneralMetricCollector(MetricCollector):
     """
     Class to collect statistics of metric values.
 
     To collect statistics of a scalar:
 
-    >>> collector = MetricCollector()
+    >>> collector = GeneralMetricCollector()
     >>> collector.stats is None
     True
     >>> collector.update(1.)
@@ -65,7 +121,7 @@ class MetricCollector(object):
 
     weighted statistics:
 
-    >>> collector = MetricCollector()
+    >>> collector = GeneralMetricCollector()
     >>> for value in [1., 2., 3., 4.]:
     ...     collector.update(value, weight=value)
     >>> collector.stats  # doctest: +ELLIPSIS
@@ -77,7 +133,7 @@ class MetricCollector(object):
 
     To collect element-wise statistics of a vector:
 
-    >>> collector = MetricCollector(shape=[3])
+    >>> collector = GeneralMetricCollector(shape=[3])
     >>> x = np.arange(12).reshape([4, 3])
     >>> for value in x:
     ...     collector.update(value)
@@ -111,7 +167,6 @@ class MetricCollector(object):
             self._array_to_value_type = lambda v: v
 
     def reset(self):
-        """Reset the collector to initial state."""
         self.mean = np.zeros(shape=self.shape, dtype=self.dtype)  # E[X]
         self.second_order_moment = np.zeros(shape=self.shape, dtype=self.dtype)  # E[X^2]
         self.counter = 0
@@ -120,7 +175,6 @@ class MetricCollector(object):
 
     @property
     def has_stats(self) -> bool:
-        """Whether or not any value has been collected?"""
         return self.counter > 0
 
     def _make_value(self):
@@ -136,38 +190,11 @@ class MetricCollector(object):
 
     @property
     def stats(self) -> Optional[MetricStats]:
-        """
-        Get the metric object.
-        Returns :obj:`None` if no value has been collected.
-        """
         if self._value is None:
             self._make_value()
         return self._value
 
     def update(self, values: RealValue, weight: RealValue = 1.):
-        """
-        Update the metric statistics from values.
-
-        This method uses the following equation to update `mean` and `square`:
-
-        .. math::
-            \\frac{\\sum_{i=1}^n w_i f(x_i)}{\\sum_{j=1}^n w_j} =
-                \\frac{\\sum_{i=1}^m w_i f(x_i)}{\\sum_{j=1}^m w_j} +
-                \\frac{\\sum_{i=m+1}^n w_i}{\\sum_{j=1}^n w_j} \\Bigg(
-                    \\frac{\\sum_{i=m+1}^n w_i f(x_i)}{\\sum_{j=m+1}^n w_j} -
-                    \\frac{\\sum_{i=1}^m w_i f(x_i)}{\\sum_{j=1}^m w_j}
-                \\Bigg)
-
-        Args:
-            values: Values to be collected in batch, numpy array or scalar
-                whose shape ends with ``self.shape``. The leading shape in
-                front of ``self.shape`` is regarded as the batch shape.
-            weight: Weights of the `values`, should be broadcastable against
-                the batch shape. (default is 1)
-
-        Raises:
-            ValueError: If the shape of `values` does not end with `self.shape`.
-        """
         values = np.asarray(values)
         if not values.size:
             return
@@ -208,7 +235,88 @@ class MetricCollector(object):
         self._value = None
 
 
-class ScalarMetricsLogger(Mapping[str, MetricCollector]):
+class ScalarMetricCollector(MetricCollector):
+    """
+    Class to collect statistics of scalar metric values.
+
+    This class should be faster than the general :class:`MetricCollector`.
+
+    >>> collector = ScalarMetricCollector()
+    >>> collector.has_stats
+    False
+    >>> collector.stats is None
+    True
+    >>> collector.update(1.)
+    >>> collector.has_stats
+    True
+    >>> collector.stats  # doctest: +ELLIPSIS
+    MetricStats(mean=1.0, var=None, std=None)
+    >>> for value in [2., 3., 4.]:
+    ...     collector.update(value)
+    >>> collector.stats  # doctest: +ELLIPSIS
+    MetricStats(mean=2.5, var=1.25, std=1.11803...)
+    >>> collector.update(np.array([5., 6., 7., 8.]))
+    >>> collector.stats  # doctest: +ELLIPSIS
+    MetricStats(mean=4.5, var=5.25, std=2.29128...)
+
+    weighted statistics:
+
+    >>> collector = ScalarMetricCollector()
+    >>> for value in [1., 2., 3., 4.]:
+    ...     collector.update(value, weight=value)
+    >>> collector.stats  # doctest: +ELLIPSIS
+    MetricStats(mean=3.0, var=1.0, std=1.0)
+    """
+
+    __slots__ = ('mean', 'second_order_moment', 'counter', 'weight_sum')
+
+    mean: float
+    second_order_moment: float
+    counter: int  # number of times `add` is called
+    weight_sum: float  # sum of all weights of added values
+
+    def __init__(self):
+        self.reset()
+
+    def reset(self):
+        self.counter = 0
+        self.mean = self.second_order_moment = self.weight_sum = 0.
+
+    @property
+    def has_stats(self) -> bool:
+        return self.counter > 0
+
+    @property
+    def stats(self) -> Optional[MetricStats]:
+        if self.counter > 1:
+            var = max(self.second_order_moment - self.mean ** 2, 0.)
+            return MetricStats(mean=self.mean, var=var, std=math.sqrt(var))
+        elif self.counter > 0:
+            return MetricStats(mean=self.mean, var=None, std=None)
+
+    def update(self, values: RealValue, weight: RealValue = 1.):
+        if np.shape(weight) == ():
+            batch_size = float(reduce(operator.mul, np.shape(values), 1.))
+            batch_weight = float(weight * batch_size)
+
+            self.weight_sum = self.weight_sum + batch_weight
+            r1 = weight / self.weight_sum
+            r2 = batch_weight / self.weight_sum
+
+            self.mean += r1 * float(np.sum(values)) - r2 * self.mean
+            self.second_order_moment += (r1 * float(np.sum(values ** 2)) -
+                                         r2 * self.second_order_moment)
+
+            self.counter += 1
+        else:  # pragma: no cover
+            raise RuntimeError(
+                '`ScalarMetricCollector` only supports scalar `weight` '
+                'argument.  Please use `GeneralMetricCollector` if you need '
+                'per-element weight on `values`.'
+            )
+
+
+class ScalarMetricsLogger(Mapping[str, GeneralMetricCollector]):
     """
     Class to log named scalar metrics.
 
@@ -249,7 +357,7 @@ class ScalarMetricsLogger(Mapping[str, MetricCollector]):
 
     __slots__ = ('_metrics',)
 
-    _metrics: Dict[str, MetricCollector]
+    _metrics: Dict[str, ScalarMetricCollector]
 
     def __init__(self):
         self._metrics = {}
@@ -260,10 +368,10 @@ class ScalarMetricsLogger(Mapping[str, MetricCollector]):
     def __len__(self) -> int:
         return len(self._metrics)
 
-    def __getitem__(self, item) -> MetricCollector:
+    def __getitem__(self, item) -> ScalarMetricCollector:
         return self._metrics[item]
 
-    def items(self) -> ItemsView[str, MetricCollector]:
+    def items(self) -> ItemsView[str, ScalarMetricCollector]:
         return self._metrics.items()
 
     def clear(self) -> None:
@@ -280,7 +388,7 @@ class ScalarMetricsLogger(Mapping[str, MetricCollector]):
         """
         for key, val in metrics.items():
             if key not in self._metrics:
-                self._metrics[key] = MetricCollector()
+                self._metrics[key] = ScalarMetricCollector()
             self._metrics[key].update(val, weight)
 
     def replace(self, metrics: Mapping[str, RealValue], weight: float = 1.):
@@ -299,7 +407,7 @@ class ScalarMetricsLogger(Mapping[str, MetricCollector]):
         """
         for key, val in metrics.items():
             if key not in self._metrics:
-                self._metrics[key] = MetricCollector()
+                self._metrics[key] = ScalarMetricCollector()
             else:
                 self._metrics[key].reset()
             self._metrics[key].update(val, weight)

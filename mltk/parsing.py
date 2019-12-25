@@ -38,15 +38,15 @@ class ProgramTrainMetricInfo(ProgramInfo):
 
 @dataclass
 class ProgramTrainInfo(ProgramInfo):
-    __slots__ = ('epoch', 'total_epochs', 'batch', 'total_batches',
-                 'step', 'total_steps', 'eta', 'epoch_eta', 'metrics')
+    __slots__ = ('epoch', 'max_epoch', 'batch', 'max_batch',
+                 'step', 'max_step', 'eta', 'epoch_eta', 'metrics')
 
     epoch: Optional[int]
     batch: Optional[int]
     step: Optional[int]
-    total_epochs: Optional[int]
-    total_batches: Optional[int]
-    total_steps: Optional[int]
+    max_epoch: Optional[int]
+    max_batch: Optional[int]
+    max_step: Optional[int]
     eta: Optional[str]
     epoch_eta: Optional[str]
     metrics: Optional[Dict[str, ProgramTrainMetricInfo]]
@@ -140,11 +140,11 @@ class MLTKTrainInfoOutputParser(ProgramOutputParser[ProgramTrainInfo]):
     ...                                b'loss: 0.875; acc: 0.91 (\\xc2\\xb10.01)'))
     >>> len(items)
     1
-    >>> (items[0].epoch, items[0].total_epochs)
+    >>> (items[0].epoch, items[0].max_epoch)
     (21, 100)
-    >>> (items[0].batch, items[0].total_batches)
+    >>> (items[0].batch, items[0].max_batch)
     (32, 99)
-    >>> (items[0].step, items[0].total_steps)
+    >>> (items[0].step, items[0].max_step)
     (555, 999)
     >>> items[0].eta
     '1d 3m'
@@ -152,7 +152,7 @@ class MLTKTrainInfoOutputParser(ProgramOutputParser[ProgramTrainInfo]):
     {'loss': ProgramTrainMetricInfo(mean='0.875', std=None), 'acc': ProgramTrainMetricInfo(mean='0.91', std='0.01')}
 
     >>> list(parser.parse_line(b'[Epoch 39, Step 666]'))
-    [ProgramTrainInfo(epoch=39, batch=None, step=666, total_epochs=None, total_batches=None, total_steps=None, eta=None, epoch_eta=None, metrics={})]
+    [ProgramTrainInfo(epoch=39, batch=None, step=666, max_epoch=None, max_batch=None, max_step=None, eta=None, epoch_eta=None, metrics={})]
 
     >>> list(parser.parse_line(b'not matched'))
     []
@@ -160,9 +160,9 @@ class MLTKTrainInfoOutputParser(ProgramOutputParser[ProgramTrainInfo]):
 
     line_pattern = re.compile(
         rb'^\['
-        rb'(?:Epoch (?P<epoch>\d+)(?:/(?P<total_epochs>\d+))?)?[, ]*'
-        rb'(?:Batch (?P<batch>\d+)(?:/(?P<total_batches>\d+))?)?[, ]*'
-        rb'(?:Step (?P<step>\d+)(?:/(?P<total_steps>\d+))?)?[, ]*'
+        rb'(?:Epoch (?P<epoch>\d+)(?:/(?P<max_epoch>\d+))?)?[, ]*'
+        rb'(?:Batch (?P<batch>\d+)(?:/(?P<max_batch>\d+))?)?[, ]*'
+        rb'(?:Step (?P<step>\d+)(?:/(?P<max_step>\d+))?)?[, ]*'
         rb'(?:ETA (?P<eta>[0-9\.e+ dhms]+))?'
         rb'\]\s*'
         rb'(?P<metrics>.*?)\s*(?:\(\*\))?\s*'
@@ -181,9 +181,9 @@ class MLTKTrainInfoOutputParser(ProgramOutputParser[ProgramTrainInfo]):
             g = m.groupdict()
 
             # the progress
-            info = {k: None for k in ('epoch', 'total_epochs',
-                                      'batch', 'total_batches',
-                                      'step', 'total_steps')}
+            info = {k: None for k in ('epoch', 'max_epoch',
+                                      'batch', 'max_batch',
+                                      'step', 'max_step')}
             for key in info.keys():
                 if g.get(key, None) is not None:
                     info[key] = int(g[key])

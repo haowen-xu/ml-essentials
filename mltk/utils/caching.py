@@ -1,11 +1,11 @@
 import os
 import shutil
+import sys
 from contextlib import contextmanager
 from typing import *
 from urllib.parse import urlparse
 
 import requests
-import sys
 from filelock import FileLock
 from tqdm import tqdm
 

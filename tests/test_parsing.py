@@ -1,9 +1,9 @@
 import re
 import time
 import unittest
+from dataclasses import dataclass
 
 import pytest
-from dataclasses import dataclass
 
 from mltk import PatternType
 from mltk.parsing import ProgramOutputReceiver, ProgramOutputParser, ProgramInfo

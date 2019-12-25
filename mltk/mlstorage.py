@@ -3,18 +3,17 @@ import re
 import time
 from datetime import datetime
 from logging import getLogger
+from typing import *
 
 import pytz
-from cachetools import LRUCache
-from typing import *
-from urllib.parse import quote as urlquote
-
 import requests
 from bson import ObjectId
+from cachetools import LRUCache
+from urllib.parse import quote as urlquote
 
 from .utils import json_dumps, json_loads, RemoteDoc
 
-__all__ = ['MLStorageClient', 'ExperimentRemoteDoc']
+__all__ = ['MLStorageClient', 'ExperimentDoc']
 
 DocumentType = FilterType = Dict[str, Any]
 IdType = Union[ObjectId, str]
@@ -298,43 +297,86 @@ class MLStorageClient(object):
             'GET', f'/_getfile/{id}/{path}', decode_json=False).content
 
 
-class ExperimentRemoteDoc(RemoteDoc):
+class ExperimentDoc(RemoteDoc):
     """:class:`RemoteDoc` class for experiment document."""
 
+    client: Optional[MLStorageClient]
+    id: Optional[IdType]
+    has_set_finished: bool = False
+
     def __init__(self,
-                 client: MLStorageClient,
-                 id: IdType,
+                 client: Optional[MLStorageClient] = None,
+                 id: Optional[IdType] = None,
                  enable_heartbeat: bool = True):
+        """
+        Construct a new :class:`ExperimentDoc`.
+
+        Args:
+            client: The client of MLStorage server.
+            id: ID of the experiment.
+            enable_heartbeat: Whether or not to enable heartbeat to the
+                remote server?
+        """
         super().__init__(
             retry_interval=30,
             relaxed_interval=5,
             heartbeat_interval=120 if enable_heartbeat else None,
-            keys_to_expand=('config', 'result', 'progress', 'webui', 'exc_info'),
+            keys_to_expand=('result', 'progress', 'webui', 'exc_info'),
         )
-        self.client: MLStorageClient = client
-        self.id: IdType = id
-        self.enable_heartbeat = enable_heartbeat
-        self.last_response: Optional[DocumentType] = None  # last response from remote
-        self.has_set_finished: bool = False
+
+        self.client = client
+        self.id = id
 
     @classmethod
     def from_env(cls, enable_heartbeat: bool = False
-                 ) -> Optional['ExperimentRemoteDoc']:
+                 ) -> Optional['ExperimentDoc']:
         """
-        Construct a :class:`ExperimentRemoteDoc` according to environmental
-        variables.
+        Construct a :class:`ExperimentDoc` according to context.
 
         Args:
             enable_heartbeat: Whether or not to update heartbeat time?
         """
+        # check the environment variables to determine the remote server
         server_uri = os.environ.get('MLSTORAGE_SERVER_URI', None)
         experiment_id = os.environ.get('MLSTORAGE_EXPERIMENT_ID', None)
+        if not server_uri or not experiment_id:
+            server_uri = experiment_id = None
+
+        # construct the client object
         if server_uri and experiment_id:
             client = MLStorageClient(server_uri)
             experiment_id = ObjectId(experiment_id)
-            remote_doc = ExperimentRemoteDoc(
-                client, experiment_id, enable_heartbeat=enable_heartbeat)
+        else:
+            client = None
+
+        # construct the object if either the remote server or local result
+        # config file is configured.
+        if client is not None:
+            remote_doc = ExperimentDoc(
+                client=client,
+                id=experiment_id,
+                enable_heartbeat=enable_heartbeat,
+            )
             return remote_doc
+
+    @classmethod
+    def default_doc(cls) -> Optional['ExperimentDoc']:
+        """
+        Get the default :class:`ExperimentDoc` object.
+
+        If there is an active :class:`Experiment` object at the context stack,
+        then returns its ``remote_doc`` attribute.  Otherwise attempt to create
+        a new instance of :class:`ExperimentDoc` via :meth:`from_env()`.
+
+        Returns:
+            The default :class:`ExperimentDoc` object, or :obj:`None` if no
+            :class:`ExperimentDoc` can be constructed according to the context.
+        """
+        from .experiment import get_active_experiment
+        exp = get_active_experiment()
+        if exp is not None:
+            return exp.doc
+        return ExperimentDoc.from_env()
 
     def now_time_literal(self) -> str:
         """
@@ -345,10 +387,13 @@ class ExperimentRemoteDoc(RemoteDoc):
         """
         return datetime.utcnow().replace(tzinfo=pytz.UTC).isoformat()
 
-    def push_to_remote(self, updates: DocumentType):
-        if self.enable_heartbeat and 'heartbeat' not in updates:
-            updates['heartbeat'] = self.now_time_literal()
-        self.last_response = self.client.update(self.id, updates)
+    RESULT_KEY_PREFIX = 'result.'
+
+    def _push_to_remote(self, updates: DocumentType) -> Optional[DocumentType]:
+        if self.client is not None and self.id is not None:
+            if self.heartbeat_enabled and 'heartbeat' not in updates:
+                updates['heartbeat'] = self.now_time_literal()
+            return self.client.update(self.id, updates)
 
     def set_finished(self,
                      status: str,

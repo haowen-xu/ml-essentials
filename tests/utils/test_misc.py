@@ -2,63 +2,11 @@ import os
 import re
 import unittest
 from tempfile import TemporaryDirectory
+from threading import Thread
 
-import numpy as np
 import pytest
 
 from mltk.utils import *
-
-
-class ETATestCase(unittest.TestCase):
-
-    def test_snapshot(self):
-        eta = ETA()
-        self.assertListEqual([], eta._times)
-        self.assertListEqual([], eta._progresses)
-
-        eta.take_snapshot(0.)
-        self.assertEqual(1, len(eta._times))
-        self.assertListEqual([0.], eta._progresses)
-
-        eta.take_snapshot(.5)
-        self.assertEqual(2, len(eta._times))
-        self.assertGreaterEqual(eta._times[1], eta._times[0])
-        self.assertListEqual([0., .5], eta._progresses)
-
-        eta.take_snapshot(.50001)
-        self.assertEqual(2, len(eta._times))
-        self.assertListEqual([0., .5], eta._progresses)
-
-        eta.take_snapshot(1., 12345)
-        self.assertEqual(3, len(eta._times))
-        self.assertEqual(12345, eta._times[-1])
-        self.assertListEqual([0., .5, 1.], eta._progresses)
-
-    def test_get_eta(self):
-        self.assertIsNone(ETA().get_eta(0.))
-
-        eta = ETA()
-        eta.take_snapshot(0., 0)
-
-        self.assertListEqual([0], eta._times)
-        self.assertListEqual([0.], eta._progresses)
-        np.testing.assert_allclose(3., eta.get_eta(.25, 1, take_snapshot=False))
-        self.assertListEqual([0], eta._times)
-        self.assertListEqual([0.], eta._progresses)
-
-        np.testing.assert_allclose(99., eta.get_eta(.01, 1))
-        self.assertListEqual([0, 1], eta._times)
-        self.assertListEqual([0., .01], eta._progresses)
-
-        np.testing.assert_allclose(57.0, eta.get_eta(.05, 3))
-        self.assertListEqual([0, 1, 3], eta._times)
-        self.assertListEqual([0., .01, .05], eta._progresses)
-
-    def test_progress_too_small(self):
-        eta = ETA()
-        eta.take_snapshot(0., 0)
-        # progress is too small for estimating the ETA
-        self.assertIsNone(eta.get_eta(5e-8, 1.))
 
 
 class IterFilesTestCase(unittest.TestCase):
@@ -160,3 +108,49 @@ class DeepCopyTestCase(unittest.TestCase):
         self.assertEqual(v, o)
         self.assertIs(v[0], o[0])
         self.assertIs(o[1], o[0])
+
+
+class ContextStackTestCase(unittest.TestCase):
+
+    def test_thread_local_and_initial_factory(self):
+        stack: ContextStack[dict] = ContextStack(dict)
+        thread_top = [None] * 10
+
+        def thread_job(i):
+            thread_top[i] = stack.top()
+
+        threads = [
+            Thread(target=thread_job, args=(i,))
+            for i, _ in enumerate(thread_top)
+        ]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+
+        for i, top in enumerate(thread_top):
+            for j, top2 in enumerate(thread_top):
+                if i != j:
+                    self.assertIsNot(top, top2)
+
+    def test_push_and_pop(self):
+        stack: ContextStack[object] = ContextStack()
+        self.assertIsNone(stack.top())
+
+        # push the first layer
+        first_layer = object()
+        stack.push(first_layer)
+        self.assertIs(stack.top(), first_layer)
+
+        # push the second layer
+        second_layer = object()
+        stack.push(second_layer)
+        self.assertIs(stack.top(), second_layer)
+
+        # pop the second layer
+        stack.pop()
+        self.assertIs(stack.top(), first_layer)
+
+        # pop the first layer
+        stack.pop()
+        self.assertIsNone(stack.top())

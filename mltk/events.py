@@ -50,9 +50,6 @@ class Event(object):
         """
         self._host.fire(self._name, *args, **kwargs)
 
-    def __call__(self, *args, **kwargs):
-        self._host.fire(self._name, *args, **kwargs)
-
     def reverse_fire(self, *args, **kwargs):
         """
         Fire this event, calling all callbacks in reversed order.
@@ -195,7 +192,9 @@ class EventHost(object):
                 host.fire(name, *args, **kwargs)
         else:
             fn = getattr(host, name, None)
-            if fn is not None:
+            if isinstance(fn, Event):
+                fn.fire(*args, **kwargs)
+            elif fn is not None:
                 fn(*args, **kwargs)
 
     def fire(self, name_, *args, **kwargs):

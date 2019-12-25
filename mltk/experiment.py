@@ -7,12 +7,16 @@ from argparse import ArgumentParser
 from tempfile import TemporaryDirectory
 from typing import *
 
+from bson import ObjectId
+
 from .config import Config, ConfigLoader, config_to_dict, config_defaults
 from .events import EventHost, Event
-from .mlstorage import MLStorageClient
-from .utils import NOT_SET, make_dir_archive, json_dumps, json_loads
+from .mlstorage import MLStorageClient, ExperimentDoc
+from .utils import (NOT_SET, make_dir_archive, json_dumps, json_loads,
+                    ContextStack)
+from .utils.remote_doc import merge_updates_into_doc
 
-__all__ = ['Experiment']
+__all__ = ['Experiment', 'get_active_experiment']
 
 TConfig = TypeVar('TConfig')
 ResultDict = Dict[str, Any]
@@ -150,16 +154,15 @@ class Experiment(Generic[TConfig]):
         self._save_config_file = save_config_file
         self._args = args
 
-        # internal state of experiment
-        self._results = {}  # type: ResultDict
-
         # the event
         self._events = EventHost()
         self._on_enter = self.events['on_enter']
         self._on_exit = self.events['on_exit']
 
         # initialize the MLStorage client if environment variable is set
-        id = os.environ.get('MLSTORAGE_EXPERIMENT_ID', None)
+        id = os.environ.get('MLSTORAGE_EXPERIMENT_ID', None) or None
+        if id is not None:
+            id = ObjectId(id)
         if os.environ.get('MLSTORAGE_SERVER_URI', None):
             client = MLStorageClient(os.environ['MLSTORAGE_SERVER_URI'])
         else:
@@ -167,6 +170,10 @@ class Experiment(Generic[TConfig]):
 
         self._id = id
         self._client = client
+
+        # construct the experiment document
+        self._remote_doc = ExperimentDoc(client=client, id=id)
+        self._remote_doc.on_before_push.do(self._on_before_push_doc)
 
     @property
     def id(self) -> Optional[str]:
@@ -177,6 +184,11 @@ class Experiment(Generic[TConfig]):
     def client(self) -> Optional[MLStorageClient]:
         """Get the MLStorage client, if the environment variable is set."""
         return self._client
+
+    @property
+    def doc(self) -> ExperimentDoc:
+        """Get the experiment document object."""
+        return self._remote_doc
 
     @property
     def config(self) -> TConfig:
@@ -202,16 +214,6 @@ class Experiment(Generic[TConfig]):
     def args(self) -> Optional[Tuple[str]]:
         """Get the CLI arguments of this experiment."""
         return self._args
-
-    @property
-    def results(self) -> ResultDict:
-        """
-        Get the results dict of this experiment.
-
-        If you would like to modify this dict, you may need to manually call
-        :meth:`save_results()`, in order to save the modifications to disk.
-        """
-        return self._results
 
     @property
     def events(self) -> EventHost:
@@ -252,55 +254,55 @@ class Experiment(Generic[TConfig]):
         """
         return self._on_exit
 
+    def _on_before_push_doc(self, updates: Dict[str, Any]):
+        """Callback to save the updated fields to local JSON file."""
+
+        # gather updated fields of: 'config', 'default_config', 'result'
+        updated_fields = {}
+        merge_updates_into_doc(
+            updated_fields,
+            updates,
+            keys_to_expand=('config', 'default_config', 'result'))
+
+        # now save the interested fields
+        def save_json_file(path, obj, merge: bool = False):
+            if merge:
+                try:
+                    if os.path.exists(path):
+                        with codecs.open(path, 'rb', 'utf-8') as f:
+                            old_obj = json_loads(f.read())
+                        obj = merge_updates_into_doc(old_obj, obj)
+                except Exception:  # pragma: no cover
+                    raise IOError(f'Cannot load the existing JSON file: {path}')
+            obj_json = json_dumps(obj)
+            with codecs.open(path, 'wb', 'utf-8') as f:
+                f.write(obj_json)
+
+        os.makedirs(self.output_dir, exist_ok=True)
+        if 'config' in updated_fields:
+            save_json_file(os.path.join(self.output_dir, 'config.json'),
+                           updated_fields['config'])
+        if 'default_config' in updated_fields:
+            save_json_file(os.path.join(self.output_dir, 'config.defaults.json'),
+                           updated_fields['default_config'])
+        if 'result' in updated_fields:
+            save_json_file(os.path.join(self.output_dir, 'result.json'),
+                           updated_fields['result'], merge=True)
+
     def save_config(self):
-        """
-        Save the config values into `output_dir + "/config.json"`, and the
-        default config values into `output_dir + "/config.defaults.json"`.
-        """
-        config_json = json_dumps(config_to_dict(self.config, flatten=True))
-        default_config_json = json_dumps(
-            config_to_dict(config_defaults(self.config), flatten=True))
-
-        with codecs.open(os.path.join(self.output_dir, 'config.json'),
-                         'wb', 'utf-8') as f:
-            f.write(config_json)
-        with codecs.open(os.path.join(self.output_dir, 'config.defaults.json'),
-                         'wb', 'utf-8') as f:
-            f.write(default_config_json)
-
-    def save_results(self):
-        """Save the result dict to `output_dir + "/result.json"`."""
-        result_file = os.path.join(self.output_dir, 'result.json')
-
-        # load the original results
-        old_result = None
-        if os.path.isfile(result_file):
-            try:
-                with codecs.open(result_file, 'rb', 'utf-8') as f:
-                    result_json = f.read()
-                if result_json:
-                    old_result = json_loads(result_json)
-                    assert(isinstance(old_result, dict))
-
-            except Exception:  # pragma: no cover
-                raise IOError('Cannot load the existing old result.')
-
-        # merge the new result with the old result
-        if old_result is not None:
-            old_result.update(self.results)
-            results = old_result
-        else:
-            results = self.results
-
-        # now save the new results
-        if results:
-            result_json = json_dumps(results)
-            with codecs.open(result_file, 'wb', 'utf-8') as f:
-                f.write(result_json)
+        """Save the config local file and remote server."""
+        self._remote_doc.update(
+            {
+                'config': config_to_dict(self.config, flatten=True),
+                'default_config': config_to_dict(
+                    config_defaults(self.config), flatten=True)
+            },
+            immediately=True
+        )
 
     def update_results(self, results: Optional[ResultDict] = None, **kwargs):
         """
-        Update the result dict, and save modifications to disk.
+        Update the result dict.
 
         Args:
             results: The dict of updates.
@@ -308,8 +310,7 @@ class Experiment(Generic[TConfig]):
         """
         results = dict(results or ())
         results.update(kwargs)
-        self._results.update(results)
-        self.save_results()
+        self._remote_doc.update({'result': results})
 
     def abspath(self, relpath: str) -> str:
         """
@@ -563,6 +564,9 @@ class Experiment(Generic[TConfig]):
         # prepare for the output dir
         os.makedirs(self.output_dir, exist_ok=True)
 
+        # start the remote doc background worker
+        self._remote_doc.start_worker()
+
         # save the configuration
         if self._save_config_file:
             self.save_config()
@@ -570,14 +574,28 @@ class Experiment(Generic[TConfig]):
         # trigger the on enter event
         self.on_enter.fire()
 
+        # add to context stack
+        _experiment_stack.push(self)
+
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         try:
             self.on_exit.fire()
         finally:
-            # ensure all changes to configuration and results are saved
-            try:
-                self.save_config()
-            finally:
-                self.save_results()
+            if _experiment_stack.top() == self:
+                _experiment_stack.pop()
+            self._remote_doc.stop_worker()
+
+
+def get_active_experiment() -> Optional[Experiment]:
+    """
+    Get the current active experiment object at the top of context stack.
+
+    Returns:
+        The active experiment object.
+    """
+    return _experiment_stack.top()
+
+
+_experiment_stack: ContextStack[Experiment] = ContextStack()

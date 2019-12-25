@@ -27,12 +27,6 @@ class EventTestCase(unittest.TestCase):
         self.assertEqual(ev.do(f2), f2)
 
         # test fire
-        ev(123, second=456)
-        for f in [f1, f2]:
-            self.assertEqual(f.call_count, 1)
-            self.assertEqual(f.call_args, ((123,), {'second': 456}))
-            f.reset_mock()
-
         ev.fire(123, second=456)
         for f in [f1, f2]:
             self.assertEqual(f.call_count, 1)
@@ -115,12 +109,25 @@ class EventTestCase(unittest.TestCase):
         class MyObject(object):
             watcher = []
 
+            def __init__(self):
+                self._events = EventHost()
+                self.another_event = self._events['another_event']
+                self.another_event.do(lambda *args, **kwargs:
+                                      self.watcher.append((args, kwargs)))
+
             def updated(self, *args, **kwargs):
                 self.watcher.append((args, kwargs))
 
         events = EventHost()
         obj = MyObject()
         events.connect(obj)
+
+        # test another event object
+        events.fire('another_event', 123, second=456)
+        self.assertEqual(obj.watcher, [
+            ((123,), {'second': 456})
+        ])
+        obj.watcher.clear()
 
         # test exist method
         events.fire('updated', 123, second=456)

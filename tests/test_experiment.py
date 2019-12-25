@@ -3,10 +3,12 @@ import codecs
 import os
 import shutil
 import sys
+import time
 import unittest
 from tempfile import TemporaryDirectory
 
 import pytest
+from bson import ObjectId
 
 from mltk import *
 from mltk.utils import json_loads
@@ -34,6 +36,9 @@ class ExperimentTestCase(unittest.TestCase):
             exp.output_dir, os.path.abspath(f'./results/{script_name}'))
         self.assertIsNone(exp.id)
         self.assertIsNone(exp.client)
+        self.assertIsInstance(exp.doc, ExperimentDoc)
+        self.assertIsNone(exp.doc.id)
+        self.assertIsNone(exp.doc.client)
 
         # test select output dir according to mlrunner env
         with TemporaryDirectory() as temp_dir:
@@ -66,9 +71,6 @@ class ExperimentTestCase(unittest.TestCase):
                                  'nor a Config instance: <object .*>'):
             _ = Experiment(object())
 
-        # test result
-        self.assertDictEqual(Experiment(_YourConfig).results, {})
-
         # test args
         self.assertTupleEqual(Experiment(_YourConfig).args, tuple(sys.argv[1:]))
         self.assertIsNone(Experiment(_YourConfig, args=None).args)
@@ -77,12 +79,15 @@ class ExperimentTestCase(unittest.TestCase):
         self.assertTupleEqual(Experiment(_YourConfig, args=args).args, args)
 
         # test specifying the environment variable of MLStorage server
+        exp_id = ObjectId()
         with set_environ_context(MLSTORAGE_SERVER_URI='http://localhost:8080',
-                                 MLSTORAGE_EXPERIMENT_ID='your_id'):
+                                 MLSTORAGE_EXPERIMENT_ID=str(exp_id)):
             e = Experiment(_YourConfig)
-            self.assertEqual(e.id, 'your_id')
+            self.assertEqual(e.id, exp_id)
             self.assertIsInstance(e.client, MLStorageClient)
             self.assertEqual(e.client.uri, 'http://localhost:8080')
+            self.assertEqual(e.doc.id, exp_id)
+            self.assertEqual(e.doc.client, e.client)
 
     def test_events(self):
         with TemporaryDirectory() as temp_dir:
@@ -106,11 +111,16 @@ class ExperimentTestCase(unittest.TestCase):
     def test_experiment(self):
         with TemporaryDirectory() as temp_dir:
             output_dir = os.path.join(temp_dir, 'output')
+            result_json_path = os.path.join(output_dir, 'result.json')
 
             # test new output dir
+            self.assertIsNone(get_active_experiment())
             with Experiment(_YourConfig, output_dir=output_dir,
                             args=('--max_epoch=200', '--train.batch_size=128')
                             ) as exp:
+                time.sleep(0.01)  # to wait for :class:`RemoteDoc` to save config
+                self.assertIs(get_active_experiment(), exp)
+
                 self.assertEqual(exp.output_dir, output_dir)
                 self.assertTrue(os.path.isdir(exp.output_dir))
 
@@ -133,25 +143,17 @@ class ExperimentTestCase(unittest.TestCase):
                 )
 
                 # there should have not been "/result.json"
-                self.assertDictEqual(exp.results, {})
-                self.assertFalse(os.path.exists(
-                    os.path.join(output_dir, 'result.json')))
+                self.assertFalse(os.path.exists(result_json_path))
 
-                # after we `update_results`, there should be "/result.json"
-                exp.update_results({'loss': 1, 'acc': 2})
-                self.assertDictEqual(exp.results, {'loss': 1, 'acc': 2})
-                self.assertDictEqual(
-                    json_loads(get_file_content(
-                        os.path.join(exp.output_dir, 'result.json'))),
-                    {'loss': 1, 'acc': 2}
-                )
+                # `update_results`, and they should be saved later in
+                # "/result.json"
+                exp.update_results({'loss': 1, 'acc': 2})  # this should be merged with the above file content
 
-                # further modify `config` and `results`, and they should be
-                # saved after exiting the context
+                # further modify `config`, and it should be saved after
+                # exiting the context
                 exp.config.max_epoch = 300
                 exp.config.max_step = 10000
-                exp.results['acc'] = 3
-                exp.results['time'] = 4
+                exp.save_config()
 
                 # test to take absolute path
                 self.assertEqual(exp.abspath('a/b/c.txt'),
@@ -259,7 +261,9 @@ class ExperimentTestCase(unittest.TestCase):
                 exp.put_file_content('c/nested/g.txt', b'g.txt')
                 exp.make_archive_on_exit('c')
 
-            # check whether the config and results have been saved
+            self.assertIsNone(get_active_experiment())
+
+            # check whether the config and result have been saved
             self.assertDictEqual(
                 json_loads(get_file_content(
                     os.path.join(exp.output_dir, 'config.json'))),
@@ -267,9 +271,8 @@ class ExperimentTestCase(unittest.TestCase):
                  'train.batch_size': 128}
             )
             self.assertDictEqual(
-                json_loads(get_file_content(
-                    os.path.join(exp.output_dir, 'result.json'))),
-                {'loss': 1, 'acc': 3, 'time': 4}
+                json_loads(get_file_content(result_json_path)),
+                {'loss': 1, 'acc': 2}
             )
 
             # check whether the archive has been made on exit
@@ -297,7 +300,7 @@ class ExperimentTestCase(unittest.TestCase):
                     )
                 ))
 
-            # test override config
+            # test override config and result
             with TemporaryDirectory() as temp_dir2:
                 yaml_path = os.path.join(temp_dir2, 'config.yaml')
                 with codecs.open(yaml_path, 'wb', 'utf-8') as f:
@@ -313,3 +316,9 @@ class ExperimentTestCase(unittest.TestCase):
                             batch_size=128
                         )
                     ))
+                    exp.update_results({'abc': 123})
+
+            self.assertDictEqual(
+                json_loads(get_file_content(result_json_path)),
+                {'loss': 1, 'acc': 2, 'abc': 123}
+            )

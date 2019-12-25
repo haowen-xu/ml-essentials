@@ -19,6 +19,7 @@ from ..utils import CacheDir, validate_enum_arg
 __all__ = ['load_mnist', 'load_fashion_mnist', 'load_cifar10', 'load_cifar100']
 
 XYTuple = Tuple[np.ndarray, np.ndarray]
+DType = Union[np.dtype, Type]
 
 
 _MNIST_LIKE_FILE_NAMES = {
@@ -64,9 +65,9 @@ def _validate_x_shape(shape, default_shape):
 def load_mnist_like(uri_prefix: str,
                     file_md5: Dict[str, str],
                     cache_name: str,
-                    x_shape: Tuple[int, ...] = (28, 28),
-                    x_dtype: np.dtype = np.uint8,
-                    y_dtype: np.dtype = np.int32
+                    x_shape: Sequence[int] = (28, 28),
+                    x_dtype: DType = np.uint8,
+                    y_dtype: DType = np.int32
                     ) -> Tuple[XYTuple, XYTuple]:
     """
     Load an MNIST-like dataset as NumPy arrays.
@@ -112,9 +113,9 @@ def load_mnist_like(uri_prefix: str,
     return (train_x, train_y), (test_x, test_y)
 
 
-def load_mnist(x_shape: Tuple[int, ...] = (28, 28),
-               x_dtype: np.dtype = np.uint8,
-               y_dtype: np.dtype = np.int32
+def load_mnist(x_shape: Sequence[int] = (28, 28),
+               x_dtype: DType = np.uint8,
+               y_dtype: DType = np.int32
                ) -> Tuple[XYTuple, XYTuple]:
     """
     Load an MNIST dataset as NumPy arrays.
@@ -131,9 +132,9 @@ def load_mnist(x_shape: Tuple[int, ...] = (28, 28),
         _MNIST_URI_PREFIX, _MNIST_FILE_MD5, 'mnist', x_shape, x_dtype, y_dtype)
 
 
-def load_fashion_mnist(x_shape: Tuple[int, ...] = (28, 28),
-                       x_dtype: np.dtype = np.uint8,
-                       y_dtype: np.dtype = np.int32
+def load_fashion_mnist(x_shape: Sequence[int] = (28, 28),
+                       x_dtype: DType = np.uint8,
+                       y_dtype: DType = np.int32
                        ) -> Tuple[XYTuple, XYTuple]:
     """
     Load an MNIST dataset as NumPy arrays.
@@ -174,9 +175,9 @@ def _cifar_load_batch(path, x_shape, x_dtype, y_dtype, expected_batch_label,
     return data, labels
 
 
-def load_cifar10(x_shape: Tuple[int, ...] = (32, 32, 3),
-                 x_dtype: np.dtype = np.float32,
-                 y_dtype: np.dtype = np.int32) -> Tuple[XYTuple, XYTuple]:
+def load_cifar10(x_shape: Sequence[int] = (32, 32, 3),
+                 x_dtype: DType = np.float32,
+                 y_dtype: DType = np.int32) -> Tuple[XYTuple, XYTuple]:
     """
     Load the CIFAR-10 dataset as NumPy arrays.
 
@@ -221,9 +222,9 @@ def load_cifar10(x_shape: Tuple[int, ...] = (32, 32, 3),
 
 
 def load_cifar100(label_mode: str = 'fine',
-                  x_shape: Tuple[int, ...] = (32, 32, 3),
-                  x_dtype: np.dtype = np.float32,
-                  y_dtype: np.dtype = np.int32) -> Tuple[XYTuple, XYTuple]:
+                  x_shape: Sequence[int] = (32, 32, 3),
+                  x_dtype: DType = np.float32,
+                  y_dtype: DType = np.int32) -> Tuple[XYTuple, XYTuple]:
     """
     Load the CIFAR-100 dataset as NumPy arrays.
 

@@ -2,13 +2,12 @@ import codecs
 import os
 import shutil
 import unittest
-
-import yaml
 from dataclasses import dataclass
 from tempfile import TemporaryDirectory
 from typing import *
 
 import pytest
+import yaml
 
 from mltk import *
 from mltk.utils import *

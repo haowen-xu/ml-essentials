@@ -395,6 +395,8 @@ class MLRunnerTestCase(unittest.TestCase):
                 )
                 config.source.copy_to_dst = True
                 config.source.cleanup = False
+                config.integration.watch_json_files = True
+                config.integration.parse_stdout = True
                 runner = MLRunner(config, retry_intervals=(0.1, 0.2, 0.3))
 
                 # run the test experiment
@@ -784,13 +786,8 @@ class MLRunTestCase(unittest.TestCase):
             self.assertEqual(config, MLRunnerConfig(
                 server='http://127.0.0.1:8080',
                 args=['echo', 'hello'],
-                source=MLRunnerConfig.source(
-                    copy_to_dst=False,
-                    make_archive=True,
-                ),
-                integration=MLRunnerConfig.integration(
-                    parse_stdout=True
-                )
+                source=MLRunnerConfig.source(),
+                integration=MLRunnerConfig.integration()
             ))
 
             # test various arguments
@@ -812,7 +809,8 @@ class MLRunTestCase(unittest.TestCase):
                     '-D', 'echo hi',
                     '--tensorboard',
                     '--no-source-archive',
-                    '--no-parse-stdout',
+                    '--parse-stdout',
+                    '--watch-files',
                     '--copy-source',
                     '--resume-from=xyzz',
                     '--clone-from=zyxx',
@@ -837,7 +835,8 @@ class MLRunTestCase(unittest.TestCase):
                         make_archive=False,
                     ),
                     integration=MLRunnerConfig.integration(
-                        parse_stdout=False
+                        parse_stdout=True,
+                        watch_json_files=True,
                     ),
                     resume_from='xyzz',
                     clone_from='zyxx',
@@ -852,6 +851,32 @@ class MLRunTestCase(unittest.TestCase):
             result = runner.invoke(mlrun, [
                 '-s', 'http://127.0.0.1:8080', '--', 'echo', 'hello'])
             self.assertEqual(result.exit_code, -1)
+
+    @mock.patch('mltk.mlrunner.MLRunner', PatchedMLRunner)
+    @mock.patch('mltk.mlrunner.MLRunnerConfigLoader',
+                PatchedMLRunnerConfigLoader)
+    def test_legacy_args(self):
+        with TemporaryDirectory() as temp_dir:
+            runner = CliRunner()
+
+            # test default arguments
+            result = runner.invoke(mlrun, [
+                '-s', 'http://127.0.0.1:8080',
+                '--legacy',
+                '--',
+                'echo', 'hello'
+            ])
+            self.assertEqual(result.exit_code, 0)
+            config = PatchedMLRunner.last_instance.config
+            self.assertEqual(config, MLRunnerConfig(
+                server='http://127.0.0.1:8080',
+                args=['echo', 'hello'],
+                source=MLRunnerConfig.source(),
+                integration=MLRunnerConfig.integration(
+                    parse_stdout=True,
+                    watch_json_files=True,
+                )
+            ))
 
 
 class ProgramHostTestCase(unittest.TestCase):

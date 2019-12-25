@@ -7,18 +7,18 @@ sudo: true
 install:
   - sudo apt-get update && sudo apt-get -y install unrar
   - pip install -r requirements-dev.txt
+  - pip install torch
+  # pip install 'tensorflow>=2.0' keras
 script:
   - export LOCAL_TEST=$(if [ "$TRAVIS_BRANCH" != "master" ]; then echo "1"; else echo "0"; fi)
   - echo LOCAL_TEST="${LOCAL_TEST}"
   # run the majority tests without third party integration
   - coverage run -m pytest
-  # run tests for `mltk.integration.keras` with Keras
-  - pip install keras
-  - KERAS_BACKEND=keras coverage run -a -m pytest mltk/integration/keras_tests.py
-  - pip uninstall keras
-  # run tests for `mltk.integration.keras` with TensorFlow 2.0
-  - pip install 'tensorflow>=2.0'
-  - KERAS_BACKEND=tensorflow coverage run -a -m pytest mltk/integration/keras_tests.py
-  - pip uninstall tensorflow
+#  # run tests for `mltk.integration.keras` with Keras
+#  - KERAS_BACKEND=keras coverage run -a -m pytest mltk/integration/keras_tests.py
+#  # run tests for `mltk.integration.keras` with TensorFlow 2.0
+#  - KERAS_BACKEND=tensorflow coverage run -a -m pytest mltk/integration/keras_tests.py
+  # run tests for `mltk.integration.pytorch`
+  - PYTHONPATH=$(pwd) coverage run -a -m pytest mltk/integration/pytorch.py
 after_success:
   - coveralls

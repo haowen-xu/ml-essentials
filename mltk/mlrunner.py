@@ -24,7 +24,7 @@ import click
 from .config import Config, ConfigLoader, field_checker, validate_config
 from .events import EventHost, Event
 from .formatting import format_key_values
-from .mlstorage import (DocumentType, MLStorageClient, ExperimentRemoteDoc,
+from .mlstorage import (DocumentType, MLStorageClient, ExperimentDoc,
                         normalize_relpath)
 from .parsing import *
 from .utils import exec_proc, json_loads, parse_tags, PatternType
@@ -115,7 +115,8 @@ class MLRunnerConfig(Config):
             return v
 
     class integration(Config):
-        parse_stdout: bool = True
+        parse_stdout: bool = False
+        watch_json_files: bool = False
         webui_patterns: Optional[List[PatternType]] = None
         config_file: str = 'config.json'
         default_config_file: str = 'config.defaults.json'
@@ -146,7 +147,7 @@ class MLRunner(object):
         self._config = config
         self._client = MLStorageClient(config.server)
         self._retry_intervals = tuple(retry_intervals)
-        self._remote_doc: Optional[ExperimentRemoteDoc] = None
+        self._remote_doc: Optional[ExperimentDoc] = None
         self._clone_doc: Optional[DocumentType] = None
 
     @property
@@ -164,7 +165,7 @@ class MLRunner(object):
         return self._retry_intervals
 
     @property
-    def remote_doc(self) -> Optional['ExperimentRemoteDoc']:
+    def remote_doc(self) -> Optional['ExperimentDoc']:
         """Get the experiment document object."""
         return self._remote_doc
 
@@ -259,9 +260,9 @@ class MLRunner(object):
 
         # assemble the progress
         progress = {}
-        for name, max_name in [('epoch', 'total_epochs'),
-                               ('batch', 'total_batches'),
-                               ('step', 'total_steps')]:
+        for name, max_name in [('epoch', 'max_epoch'),
+                               ('batch', 'max_batch'),
+                               ('step', 'max_step')]:
             v = getattr(info, name)
             max_v = getattr(info, max_name)
             if v is not None:
@@ -300,15 +301,16 @@ class MLRunner(object):
         self.remote_doc.update({'webui': {name: uri}})
 
     def _create_log_receiver(self):
-        webui_patterns = self.config.integration.webui_patterns
-        log_receiver = ProgramOutputReceiver(
-            parsers=[
-                MLTKTrainInfoOutputParser(),
-                GeneralWebUIOutputParser(patterns=webui_patterns),
-            ]
-        )
-        log_receiver.on_program_info.do(self._on_program_output_info_received)
-        return log_receiver
+        if self.config.integration.parse_stdout:
+            webui_patterns = self.config.integration.webui_patterns
+            log_receiver = ProgramOutputReceiver(
+                parsers=[
+                    MLTKTrainInfoOutputParser(),
+                    GeneralWebUIOutputParser(patterns=webui_patterns),
+                ]
+            )
+            log_receiver.on_program_info.do(self._on_program_output_info_received)
+            return log_receiver
 
     def _on_json_updated(self, name, content):
         if name == self.config.integration.result_file:
@@ -385,16 +387,19 @@ class MLRunner(object):
         )
 
         # create the background json watcher
-        json_watcher = JsonFileWatcher(
-            root_dir=output_dir,
-            file_names=[
-                self.config.integration.result_file,
-                self.config.integration.config_file,
-                self.config.integration.default_config_file,
-                self.config.integration.webui_file,
-            ]
-        )
-        json_watcher.on_json_updated.do(self._on_json_updated)
+        if self.config.integration.watch_json_files:
+            json_watcher = JsonFileWatcher(
+                root_dir=output_dir,
+                file_names=[
+                    self.config.integration.result_file,
+                    self.config.integration.config_file,
+                    self.config.integration.default_config_file,
+                    self.config.integration.webui_file,
+                ]
+            )
+            json_watcher.on_json_updated.do(self._on_json_updated)
+        else:
+            json_watcher = None
 
         # initialize the control server
         control_server = ControlServer()
@@ -438,8 +443,9 @@ class MLRunner(object):
             getLogger(__name__).debug('Temporary file cleaner initialized.')
 
             # start the background json watcher
-            ctx_stack.enter_context(json_watcher)
-            getLogger(__name__).debug('JSON file watcher started.')
+            if json_watcher is not None:
+                ctx_stack.enter_context(json_watcher)
+                getLogger(__name__).debug('JSON file watcher started.')
 
             # start the daemon processes
             if daemons and self.config.daemon:
@@ -532,7 +538,7 @@ class MLRunner(object):
             with configure_logger(runner_log_file):
                 try:
                     # create the doc object to manage further updates
-                    self._remote_doc = ExperimentRemoteDoc(self.client, doc_id)
+                    self._remote_doc = ExperimentDoc(self.client, doc_id)
                     self.remote_doc.start_worker()
 
                     try:
@@ -631,6 +637,14 @@ class MLRunner(object):
               is_flag=True, required=False, default=None,
               help='Whether or not to parse the output of experiment and '
                    'daemon processes?')
+@click.option('--watch-files/--no-watch-files', 'watch_json_files',
+              is_flag=True, required=False, default=None,
+              help='Whether or not to watch the changes of `result.json`, '
+                   '`config.json`, `config.defaults.json` and `webui.json`?')
+@click.option('--legacy', 'legacy_mode',
+              is_flag=True, required=False, default=None,
+              help='Specifying `--legacy` is equivalent to specifying both '
+                   '`--parse-stdout` and `--watch-files`.')
 @click.option('--print-config', 'print_config',
               is_flag=True, required=False, default=False,
               help='Print the configuration, then exit.')
@@ -649,8 +663,8 @@ class MLRunner(object):
 @click.argument('args', nargs=-1)
 def mlrun(config_file, name, description, tags, env, gpu, work_dir, server,
           resume_from, clone_from, copy_source, source_archive, parse_stdout,
-          print_config, daemon, tensorboard, command, ctrl_c_timeout,
-          args):
+          watch_json_files, legacy_mode, print_config, daemon, tensorboard,
+          command, ctrl_c_timeout, args):
     """
     Run an experiment.
 
@@ -774,7 +788,8 @@ def mlrun(config_file, name, description, tags, env, gpu, work_dir, server,
         'clone_from': clone_from,
         'source.copy_to_dst': copy_source,
         'source.make_archive': source_archive,
-        'integration.parse_stdout': parse_stdout,
+        'integration.parse_stdout': legacy_mode or parse_stdout,
+        'integration.watch_json_files': legacy_mode or watch_json_files,
         'daemon': daemon or None,
         'args': command or args,
         'ctrl_c_timeout': ctrl_c_timeout,

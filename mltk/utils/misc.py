@@ -1,7 +1,7 @@
 import copy
 import os
 import re
-import time
+import threading
 from contextlib import contextmanager
 from typing import *
 
@@ -9,16 +9,19 @@ import numpy as np
 from heapdict import heapdict
 
 __all__ = [
-    'PatternType',
-    'Singleton', 'NOT_SET',
-    'ETA', 'minibatch_slices_iterator',
-    'optional_apply',  'validate_enum_arg',
-    'maybe_close', 'iter_files',
-    'InheritanceDict', 'CachedInheritanceDict',
-    'parse_tags', 'deep_copy',
+    'PatternType', 'Singleton',
+    'NOT_SET', 'ALL',
+    'generate_random_seed',
+    'optional_apply',  'validate_enum_arg', 'maybe_close', 'iter_files',
+    'InheritanceDict', 'CachedInheritanceDict', 'parse_tags', 'deep_copy',
+    'ContextStack', 'GeneratorIterator',
 ]
 
 PatternType = type(re.compile('x'))
+TArgValue = TypeVar('TArgValue')
+TValue = TypeVar('TValue')
+TContextObject = TypeVar('TContextObject')
+ContextObjectFactoryType = Callable[[], TContextObject]
 
 
 class Singleton(object):
@@ -78,113 +81,35 @@ class NotSet(Singleton):
 NOT_SET = NotSet()
 
 
-class ETA(object):
+class AllConstant(Singleton):
     """
-    Class to help compute the Estimated Time Ahead (ETA).
+    Class of the `ALL` constant.
 
-    >>> now = time.time()
-    >>> eta = ETA()
-    >>> eta.take_snapshot(progress=0.0, now=now)  # record the start time
-    >>> eta.get_eta(progress=0.01, now=now + 5.)  # i.e., 1% work costs 5s
-    495.0
+    >>> ALL
+    ALL
+    >>> ALL == ALL
+    True
+    >>> AllConstant() is ALL
+    True
+    >>> AllConstant() == ALL
+    True
     """
 
-    def __init__(self):
-        """Construct a new :class:`ETA`."""
-        self._times = []
-        self._progresses = []
-
-    def take_snapshot(self, progress: Union[int, float],
-                      now: Optional[Union[int, float]] = None):
-        """
-        Take a snapshot of ``(progress, now)``, for later computing ETA.
-
-        Args:
-            progress: The current progress, range in ``[0, 1]``.
-            now: The current timestamp in seconds.  If not specified, use
-                ``time.time()``.
-        """
-        if not self._progresses or progress - self._progresses[-1] > .001:
-            # we only record the time and corresponding progress if the
-            # progress has been advanced by 0.1%
-            if now is None:
-                now = time.time()
-            self._progresses.append(progress)
-            self._times.append(now)
-
-    def get_eta(self,
-                progress: Union[int, float],
-                now: Optional[Union[int, float]] = None,
-                take_snapshot: bool = True) -> Optional[float]:
-        """
-        Get the Estimated Time Ahead (ETA).
-
-        Args:
-            progress: The current progress, range in ``[0, 1]``.
-            now: The current timestamp in seconds.  If not specified, use
-                ``time.time()``.
-            take_snapshot: Whether or not to take a snapshot of
-                the specified ``(progress, now)``? (default :obj:`True`)
-
-        Returns:
-            The ETA in seconds, or :obj:`None` if the ETA cannot be estimated.
-        """
-        # TODO: Maybe we can have a better estimation algorithm here!
-        if now is None:
-            now = time.time()
-
-        if self._progresses:
-            time_delta = now - self._times[0]
-            progress_delta = progress - self._progresses[0]
-            progress_left = 1. - progress
-            if progress_delta < 1e-7:
-                return None
-            eta = time_delta / progress_delta * progress_left
-        else:
-            eta = None
-
-        if take_snapshot:
-            self.take_snapshot(progress, now)
-
-        return eta
+    def __repr__(self):
+        return 'ALL'
 
 
-def minibatch_slices_iterator(length: int,
-                              batch_size: int,
-                              skip_incomplete: bool = False
-                              ) -> Generator[slice, None, None]:
+ALL = AllConstant()
+
+
+def generate_random_seed():
     """
-    Iterate through all the mini-batch slices.
+    Generate a new random seed from the default NumPy random state.
 
-    >>> arr = np.arange(10)
-    >>> for batch_s in minibatch_slices_iterator(len(arr), batch_size=4):
-    ...     print(arr[batch_s])
-    [0 1 2 3]
-    [4 5 6 7]
-    [8 9]
-    >>> for batch_s in minibatch_slices_iterator(
-    ...         len(arr), batch_size=4, skip_incomplete=True):
-    ...     print(arr[batch_s])
-    [0 1 2 3]
-    [4 5 6 7]
-
-    Args:
-        length: Total length of data in an epoch.
-        batch_size: Size of each mini-batch.
-        skip_incomplete: If :obj:`True`, discard the final batch if it
-            contains less than `batch_size` number of items.
-
-    Yields
-        Slices of each mini-batch.  The last mini-batch may contain less
-            elements than `batch_size`.
+    Returns:
+        int: The new random seed.
     """
-    start = 0
-    stop1 = (length // batch_size) * batch_size
-    while start < stop1:
-        yield slice(start, start + batch_size, 1)
-        start += batch_size
-    if not skip_incomplete and start < length:
-        yield slice(start, length, 1)
+    return np.random.randint(0xffffffff)
 
 
 def optional_apply(f, value):
@@ -202,9 +127,6 @@ def optional_apply(f, value):
     """
     if value is not None:
         return f(value)
-
-
-TArgValue = TypeVar('TArgValue')
 
 
 def validate_enum_arg(arg_name: str,
@@ -300,9 +222,6 @@ def iter_files(root_dir: str, sep: str = '/') -> Generator[str, None, None]:
                 yield x
         else:
             yield name
-
-
-TValue = TypeVar('TValue')
 
 
 class _InheritanceNode(object):
@@ -473,9 +392,6 @@ def parse_tags(s: str) -> List[str]:
     return tags
 
 
-TValue = TypeVar('TValue')
-
-
 def deep_copy(value: TValue) -> TValue:
     """
     A patched deep copy function, that can handle various types cannot be
@@ -499,3 +415,101 @@ def deep_copy(value: TValue) -> TValue:
             copy._deepcopy_dispatch[PatternType] = old_dispatcher
         else:
             del copy._deepcopy_dispatch[PatternType]
+
+
+class ContextStack(Generic[TContextObject]):
+    """
+    A thread-local context stack for general purpose.
+
+    Usage::
+
+        stack = ContextStack()
+        stack.push(dict())  # push an object to the top of thread local stack
+        stack.top()[key] = value  # use the top object
+        stack.pop()  # pop an object from the top of thread local stack
+    """
+
+    def __init__(self,
+                 initial_factory: Optional[ContextObjectFactoryType] = None):
+        """
+        Construct a new instance of :class:`ContextStack`.
+
+        Args:
+            initial_factory: If specified, fill the context stack  with an
+                initial object generated by this factory.
+        """
+        self._thread_local = threading.local()
+        self._initial_factory = initial_factory
+
+    @property
+    def items(self) -> List[TContextObject]:
+        if not hasattr(self._thread_local, 'items'):
+            items = []
+            if self._initial_factory is not None:
+                items.append(self._initial_factory())
+            setattr(self._thread_local, 'items', items)
+        return self._thread_local.items
+
+    def push(self, obj: TContextObject) -> None:
+        """
+        Push an object to the context stack.
+
+         Args:
+            obj: The object to be pushed.
+        """
+        self.items.append(obj)
+
+    def pop(self) -> TContextObject:
+        """
+        Pop an object from the context stack.
+
+        Returns:
+            The poped context object.
+
+        Raises:
+            IndexError: if the context stack is empty.
+        """
+        return self.items.pop()
+
+    def top(self) -> Optional[TContextObject]:
+        """
+        Get the top item of the context stack. or :obj:`None` if the
+        context stack is empty.
+        """
+        items = self.items
+        if items:
+            return items[-1]
+
+
+class GeneratorIterator(Iterator[TValue]):
+    """
+    Wraps a generator as an iterator, and provides the :meth:`close()`
+    method to close the wrapped generator.
+
+    >>> def make_generator():
+    ...     try:
+    ...         for i in range(3):
+    ...             yield i
+    ...     finally:
+    ...         print('generator closed')
+
+    >>> g = GeneratorIterator(make_generator())
+    >>> next(g)
+    0
+    >>> iter(g) is g
+    True
+    >>> g.close()
+    generator closed
+    """
+
+    def __init__(self, g: Generator[TValue, None, None]):
+        self._g = g
+
+    def __iter__(self) -> 'GeneratorIterator[TValue]':
+        return self
+
+    def __next__(self):
+        return next(self._g)
+
+    def close(self) -> None:
+        self._g.close()

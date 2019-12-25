@@ -12,7 +12,7 @@ import requests
 from bson import ObjectId
 from mock import Mock
 
-from mltk import MLStorageClient, ExperimentRemoteDoc
+from mltk import MLStorageClient, ExperimentDoc
 from mltk.utils import json_dumps, json_loads
 
 
@@ -337,45 +337,44 @@ class MLStorageClientTestCase(unittest.TestCase):
                          b'hello, world')
 
 
-class ExperimentRemoteDocTestCase(unittest.TestCase):
+class ExperimentDocTestCase(unittest.TestCase):
 
     def test_construct(self):
         client = Mock()
         id = ObjectId()
 
-        doc = ExperimentRemoteDoc(client, id)
+        doc = ExperimentDoc(client, id)
         self.assertEqual(doc.retry_interval, 30)
         self.assertEqual(doc.relaxed_interval, 5)
         self.assertEqual(doc.heartbeat_interval, 120)
         self.assertEqual(doc.keys_to_expand,
-                         ('config', 'result', 'progress', 'webui', 'exc_info'))
+                         ('result', 'progress', 'webui', 'exc_info'))
         self.assertIs(doc.client, client)
         self.assertEqual(doc.id, id)
-        self.assertEqual(doc.enable_heartbeat, True)
-        self.assertEqual(doc.last_response, None)
+        self.assertEqual(doc.heartbeat_enabled, True)
         self.assertEqual(doc.has_set_finished, False)
         self.assertIsInstance(doc.now_time_literal(), str)
 
-        doc = ExperimentRemoteDoc(client, id, enable_heartbeat=False)
-        self.assertEqual(doc.enable_heartbeat, False)
+        doc = ExperimentDoc(client, id, enable_heartbeat=False)
+        self.assertEqual(doc.heartbeat_enabled, False)
         self.assertEqual(doc.heartbeat_interval, None)
 
     def test_from_env(self):
         os.environ.pop('MLSTORAGE_SERVER_URI', None)
         os.environ.pop('MLSTORAGE_EXPERIMENT_ID', None)
-        self.assertIsNone(ExperimentRemoteDoc.from_env())
+        self.assertIsNone(ExperimentDoc.from_env())
 
         server_uri = 'http://127.0.0.1:8080'
         experiment_id = ObjectId()
         os.environ['MLSTORAGE_SERVER_URI'] = server_uri
         os.environ['MLSTORAGE_EXPERIMENT_ID'] = str(experiment_id)
-        doc = ExperimentRemoteDoc.from_env()
-        self.assertEqual(doc.enable_heartbeat, False)
+        doc = ExperimentDoc.from_env()
+        self.assertEqual(doc.heartbeat_enabled, False)
         self.assertEqual(doc.id, experiment_id)
         self.assertEqual(doc.client.uri, server_uri)
 
-        doc = ExperimentRemoteDoc.from_env(enable_heartbeat=True)
-        self.assertEqual(doc.enable_heartbeat, True)
+        doc = ExperimentDoc.from_env(enable_heartbeat=True)
+        self.assertEqual(doc.heartbeat_enabled, True)
 
         os.environ.pop('MLSTORAGE_SERVER_URI', None)
         os.environ.pop('MLSTORAGE_EXPERIMENT_ID', None)
@@ -389,10 +388,9 @@ class ExperimentRemoteDocTestCase(unittest.TestCase):
 
         # test push_to_remote without heartbeat field
         push_updates = {'id': id, 'flag': 456}
-        doc = ExperimentRemoteDoc(client, id)
+        doc = ExperimentDoc(client, id)
         doc.now_time_literal = Mock(return_value=now_time)
-        doc.push_to_remote(push_updates)
-        self.assertEqual(doc.last_response, return_value)
+        self.assertEqual(doc.push_to_remote(push_updates), return_value)
 
         self.assertEqual(client.update.call_args[0][0], id)
         updates_arg = client.update.call_args[0][1]
@@ -403,17 +401,16 @@ class ExperimentRemoteDocTestCase(unittest.TestCase):
         # test with heartbeat field
         now_time2 = datetime.utcnow().replace(tzinfo=pytz.UTC).isoformat()
         push_updates = {'id': id, 'flag': 456, 'heartbeat': now_time2}
-        doc = ExperimentRemoteDoc(client, id)
+        doc = ExperimentDoc(client, id)
         doc.now_time_literal = Mock(return_value=now_time)
-        doc.push_to_remote(push_updates)
-        self.assertEqual(doc.last_response, return_value)
+        self.assertEqual(doc.push_to_remote(push_updates), return_value)
         self.assertEqual(client.update.call_args[0][0], id)
         self.assertEqual(client.update.call_args[0][1], push_updates)
 
     def test_set_finished(self):
         client = MLStorageClient('http://127.0.0.1:8080')
         id = ObjectId()
-        doc = ExperimentRemoteDoc(client, id)
+        doc = ExperimentDoc(client, id)
         now_time = datetime.utcnow().replace(tzinfo=pytz.UTC).isoformat()
         doc.now_time_literal = Mock(return_value=now_time)
 
@@ -448,16 +445,15 @@ class ExperimentRemoteDocTestCase(unittest.TestCase):
                              retry_intervals=(0.1, 0.2))
 
         self.assertEqual(len(retry_times), 3)
-        self.assertLess(abs(retry_times[0] - start_time), 0.01)
-        self.assertLess(abs(retry_times[1] - retry_times[0] - 0.1), 0.01)
-        self.assertLess(abs(retry_times[2] - retry_times[1] - 0.2), 0.01)
+        self.assertLess(abs(retry_times[0] - start_time), 0.02)
+        self.assertLess(abs(retry_times[1] - retry_times[0] - 0.1), 0.02)
+        self.assertLess(abs(retry_times[2] - retry_times[1] - 0.2), 0.02)
         self.assertEqual(doc.has_set_finished, False)
 
         # test success
         return_value = {'id': id, 'flags': 456}
         client.update = Mock(return_value=return_value)
         doc.set_finished('COMPLETED', {'abc': 123}, retry_intervals=(0.1, 0.2))
-        self.assertEqual(doc.last_response, return_value)
         self.assertEqual(client.update.call_count, 1)
         self.assertEqual(client.update.call_args[0][0], id)
         self.assertEqual(client.update.call_args[0][1], expected_updates)

@@ -5,12 +5,13 @@ from typing import *
 import numpy as np
 
 __all__ = [
+    'StateDictType',
     'StatefulObject', 'SimpleStatefulObject', 'StatefulObjectGroup',
     'StateSaver',
 ]
 
-StateDict = Dict[str, Any]
-StatefulObjects = Union['StatefulObjectGroup', Dict[str, 'StatefulObject']]
+StateDictType = Dict[str, Any]
+StatefulObjectTypes = Union['StatefulObjectGroup', Dict[str, 'StatefulObject']]
 
 
 class StatefulObject(object):
@@ -31,10 +32,10 @@ class StatefulObject(object):
                 self.value = state['value']
     """
 
-    def get_state_dict(self) -> StateDict:
+    def get_state_dict(self) -> StateDictType:
         raise NotImplementedError()
 
-    def set_state_dict(self, state: StateDict):
+    def set_state_dict(self, state: StateDictType):
         raise NotImplementedError()
 
 
@@ -51,14 +52,14 @@ class SimpleStatefulObject(StatefulObject):
     (456, 789)
     """
 
-    def get_state_dict(self) -> StateDict:
+    def get_state_dict(self) -> StateDictType:
         return self.__dict__
 
-    def set_state_dict(self, state: StateDict):
+    def set_state_dict(self, state: StateDictType):
         self.__dict__.update(state)
 
 
-class StatefulObjectGroup(StatefulObject):
+class StatefulObjectGroup(StatefulObject, Mapping[str, StatefulObject]):
     """
     An object group contains multiple :class:`StatefulObject`, each with a
     dedicated prefix key, such that all state from these objects can be
@@ -69,6 +70,16 @@ class StatefulObjectGroup(StatefulObject):
     >>> b = SimpleStatefulObject()
     >>> b.value = 456
     >>> obj = StatefulObjectGroup({'a': a, 'b': b})
+
+    >>> len(obj)
+    2
+    >>> list(obj)
+    ['a', 'b']
+    >>> obj['a'] is a
+    True
+    >>> obj['b'] is b
+    True
+
     >>> obj.get_state_dict()
     {'a.value': 123, 'b.value': 456}
     >>> obj.set_state_dict({'a.value': 1230, 'a.value2': 1231,
@@ -102,6 +113,15 @@ class StatefulObjectGroup(StatefulObject):
         self._objects = dict(objects)  # type: Dict[str, StatefulObject]
         self._strict = bool(strict)
 
+    def __getitem__(self, k: str) -> StatefulObject:
+        return self._objects[k]
+
+    def __len__(self) -> int:
+        return len(self._objects)
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(self._objects)
+
     @property
     def strict(self) -> bool:
         """
@@ -127,7 +147,7 @@ class StatefulObjectGroup(StatefulObject):
             raise TypeError(f'`obj` is not a StatefulObject: {obj!r}')
         self._objects[prefix] = obj
 
-    def get_state_dict(self) -> StateDict:
+    def get_state_dict(self) -> StateDictType:
         """Get the state dict."""
         ret = {}
         for prefix, obj in self._objects.items():
@@ -135,7 +155,7 @@ class StatefulObjectGroup(StatefulObject):
                 ret[f'{prefix}.{key}'] = value
         return ret
 
-    def set_state_dict(self, state: StateDict):
+    def set_state_dict(self, state: StateDictType):
         """
         Set the state dict.
 
@@ -194,7 +214,7 @@ class StateSaver(object):
     """
 
     def __init__(self,
-                 object_or_objects: StatefulObjects,
+                 object_or_objects: StatefulObjectTypes,
                  pickle_protocol=pkl.HIGHEST_PROTOCOL):
         """
         Construct a new :class:`StateSaver`.
