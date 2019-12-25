@@ -1,6 +1,8 @@
 import copy
+import os
 import random
 import unittest
+from tempfile import TemporaryDirectory
 
 import mock
 import numpy as np
@@ -26,6 +28,17 @@ class BaseLoopTestCase(unittest.TestCase):
         self.assertIs(loop._callbacks[-1], loop.logger)
         self.assertEqual(loop.batch, 2)
         self.assertEqual(loop.max_batch, 102)
+
+        # default args with remote doc from experiment context, or explicitly None
+        with TemporaryDirectory() as temp_dir:
+            with Experiment(Config(), output_dir=temp_dir) as exp:
+                loop = BaseLoop(Stage(StageType.TEST))
+                self.assertIs(loop._remote_doc, exp.doc)
+                self.assertIs(loop.logger.remote_doc, exp.doc)
+
+                loop = BaseLoop(Stage(StageType.TEST), remote_doc=None)
+                self.assertIsNone(loop._remote_doc)
+                self.assertIsNone(loop.logger.remote_doc)
 
         # with remote doc
         stage = Stage(StageType.TEST)

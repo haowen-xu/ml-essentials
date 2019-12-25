@@ -217,7 +217,7 @@ class CheckpointManagerTestCase(unittest.TestCase):
 
             # save new checkpoints, with auto name
             base_time = int(time.time()) + 0.01
-            base_name = datetime.fromtimestamp(base_time). \
+            base_name = datetime.utcfromtimestamp(base_time). \
                 strftime('%Y-%m-%d %H-%M-%S')
 
             class FakeDateTime(object):
@@ -227,7 +227,7 @@ class CheckpointManagerTestCase(unittest.TestCase):
                 @classmethod
                 def now(cls):
                     cls._counter += 1
-                    return datetime.fromtimestamp(
+                    return datetime.utcfromtimestamp(
                         base_time + 0.01 * int(cls._counter // 4))
 
             for i in range(3):

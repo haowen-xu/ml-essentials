@@ -220,7 +220,7 @@ class LoggerCallbackTestCase(unittest.TestCase):
             def now(self):
                 return dt
 
-        dt = datetime.fromtimestamp(1576755571.662434)
+        dt = datetime.utcfromtimestamp(1576755571.662434)
         dt_str = format_as_asctime(dt)
         with mock.patch('mltk.callbacks.datetime', FakeDateTime()):
             logs = []
@@ -528,7 +528,7 @@ class LoggerCallbackTestCase(unittest.TestCase):
         # set `show_time`
         class FakeDateTime(object):
             def now(self):
-                return datetime.fromtimestamp(1576755571.662434)
+                return datetime.utcfromtimestamp(1576755571.662434)
 
         with mock.patch('mltk.callbacks.datetime', FakeDateTime()):
             cb._write_stage_or_epoch_end_console_log(
@@ -539,7 +539,7 @@ class LoggerCallbackTestCase(unittest.TestCase):
             )
         self.assertEqual(
             logs,
-            ['[2019-12-19 19:39:31,662] <<< - acc: 0.875 - '
+            ['[2019-12-19 11:39:31,662] <<< - acc: 0.875 - '
              'loss: 0.125 (±0.25) - >>>\n']
         )
         logs.clear()

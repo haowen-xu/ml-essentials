@@ -261,8 +261,8 @@ def format_as_asctime(dt: datetime) -> str:
     """
     Format datetime `dt` using the `asctime` format of the logging module.
 
-    >>> format_as_asctime(datetime.fromtimestamp(1576755571.662434))
-    '2019-12-19 19:39:31,662'
+    >>> format_as_asctime(datetime.utcfromtimestamp(1576755571.662434))
+    '2019-12-19 11:39:31,662'
 
     Args:
         dt: The datetime object.

@@ -115,7 +115,7 @@ class BaseLoop(metaclass=DocInherit):
 
     def __init__(self,
                  stage: Stage,
-                 remote_doc: Optional[ExperimentDoc] = None,
+                 remote_doc: Optional[ExperimentDoc] = NOT_SET,
                  callbacks: Sequence[Callback] = ()):
         """
         Construct a new :class:`BaseLoop`.
@@ -127,6 +127,10 @@ class BaseLoop(metaclass=DocInherit):
             remote_doc: The experiment document object.
             callbacks: The callbacks.
         """
+        # construct the default remote doc object, if it is `NOT_SET`
+        if remote_doc is NOT_SET:
+            remote_doc = ExperimentDoc.default_doc()
+
         # merge `callbacks` with `stage.callbacks`, sort them into proper
         # order, and add default callbacks if not given.
         self._callbacks = CallbackList.new(
@@ -440,7 +444,7 @@ class TrainLoop(BaseLoop):
                  max_epoch: Optional[int] = None,
                  max_batch: Optional[int] = None,
                  only_batch: bool = False,
-                 remote_doc: Optional[ExperimentDoc] = None,
+                 remote_doc: Optional[ExperimentDoc] = NOT_SET,
                  callbacks: Sequence[Callback] = ()):
         """
         Construct a new :class:`TrainLoop`.
@@ -736,7 +740,7 @@ class _BatchOnlyLoop(BaseLoop):
 class ValidationLoop(_BatchOnlyLoop):
 
     def __init__(self,
-                 remote_doc: Optional[ExperimentDoc] = None,
+                 remote_doc: Optional[ExperimentDoc] = NOT_SET,
                  callbacks: Sequence[Callback] = ()):
         super().__init__(
             stage=Stage(type=StageType.VALIDATION),
@@ -748,7 +752,7 @@ class ValidationLoop(_BatchOnlyLoop):
 class TestLoop(_BatchOnlyLoop):
 
     def __init__(self,
-                 remote_doc: Optional[ExperimentDoc] = None,
+                 remote_doc: Optional[ExperimentDoc] = NOT_SET,
                  callbacks: Sequence[Callback] = ()):
         super().__init__(
             stage=Stage(type=StageType.TEST),
@@ -763,7 +767,7 @@ class PredictLoop(_BatchOnlyLoop):
     RUN_BATCHES_DEFAULT_OUTPUTS = ALL
 
     def __init__(self,
-                 remote_doc: Optional[ExperimentDoc] = None,
+                 remote_doc: Optional[ExperimentDoc] = NOT_SET,
                  callbacks: Sequence[Callback] = ()):
         super().__init__(
             stage=Stage(type=StageType.PREDICT),
