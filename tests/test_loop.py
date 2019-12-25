@@ -68,6 +68,40 @@ class BaseLoopTestCase(unittest.TestCase):
         self.assertEqual(loop._callbacks, expected_callbacks)
         self.assertIs(loop.logger, expected_callbacks[-1])
 
+    def test_parent_child(self):
+        # the parent loop
+        stage = Stage(StageType.TRAIN)
+        loop = BaseLoop(stage=stage)
+
+        # the child loop
+        stage2 = Stage(StageType.TEST)
+        loop2 = BaseLoop(stage=stage2, parent=loop)
+
+        # the parent loop context
+        with loop:
+            loop.add_metrics({'a': 1.0})
+            self.assertEqual(loop._stage_metrics, {'a': 1.0})
+
+            # the child loop context
+            with loop2:
+                self.assertEqual(loop._child_stack, [loop2])
+
+                loop2.add_metrics({'b': 2.0})
+                self.assertEqual(loop2._stage_metrics, {'test_b': 2.0})
+
+                loop.add_metrics({'a': 3.0})
+                self.assertEqual(loop._stage_metrics, {'a': 1.0})
+                self.assertEqual(loop2._stage_metrics,
+                                 {'test_a': 3.0, 'test_b': 2.0})
+
+                loop.add_metrics({'a': 4.0}, add_to_child_=False)
+                self.assertEqual(loop._stage_metrics, {'a': 4.0})
+                self.assertEqual(loop2._stage_metrics,
+                                 {'test_a': 3.0, 'test_b': 2.0})
+
+            loop.add_metrics({'b': 5.0})
+            self.assertEqual(loop._stage_metrics, {'a': 4.0, 'b': 5.0})
+
     def test_add_metrics(self):
         # test add to stage metrics
         stage = Stage(StageType.TRAIN)
@@ -813,6 +847,7 @@ class TrainLoopTestCase(unittest.TestCase):
             self.assertIs(sub_loop.logger, loop.logger)
             self.assertIs(sub_loop._remote_doc, loop._remote_doc)
             self.assertEqual(sub_loop._callbacks, loop._callbacks)
+            self.assertIs(sub_loop.parent, loop)
 
 
 class BatchOnlyLoopTestCase(unittest.TestCase):

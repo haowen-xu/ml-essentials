@@ -1,6 +1,5 @@
 import time
 from contextlib import contextmanager
-
 from dataclasses import dataclass
 from itertools import chain
 from typing import *
@@ -95,6 +94,12 @@ class BaseLoop(metaclass=DocInherit):
     auto-created logger callback instance.
     """
 
+    parent: Optional['BaseLoop']
+    """The parent loop."""
+
+    _child_stack: List['BaseLoop']
+    """The stack of open child loops."""
+
     _stage: Stage  # the active stage
     _remote_doc: Optional[ExperimentDoc]
     _batch_metrics: Dict[str, Any]
@@ -119,7 +124,8 @@ class BaseLoop(metaclass=DocInherit):
     def __init__(self,
                  stage: Stage,
                  remote_doc: Optional[ExperimentDoc] = NOT_SET,
-                 callbacks: Sequence[Callback] = ()):
+                 callbacks: Sequence[Callback] = (),
+                 parent: Optional['BaseLoop'] = None):
         """
         Construct a new :class:`BaseLoop`.
 
@@ -129,6 +135,7 @@ class BaseLoop(metaclass=DocInherit):
                 different loops.
             remote_doc: The experiment document object.
             callbacks: The callbacks.
+            parent: The parent loop.
         """
         # construct the default remote doc object, if it is `NOT_SET`
         if remote_doc is NOT_SET:
@@ -144,6 +151,9 @@ class BaseLoop(metaclass=DocInherit):
                            if isinstance(cb, LoggerCallback))
         stage.callbacks = CallbackList(
             [self._LoopEventCallbackClass(self, stage)] + self._callbacks)
+
+        self.parent = parent
+        self._child_stack = []
 
         self._stage = stage
         self._remote_doc = remote_doc
@@ -168,6 +178,7 @@ class BaseLoop(metaclass=DocInherit):
 
     def add_metrics(self,
                     metrics_: Optional[Dict[str, Any]] = None,
+                    add_to_child_: bool = True,
                     **kwargs: Any) -> None:
         """
         Add metrics to the loop.
@@ -177,24 +188,30 @@ class BaseLoop(metaclass=DocInherit):
                 The names of the metrics will be ensured to have proper
                 prefix, according to the loop type.
                 See :meth:`mltk.StageType.add_metric_prefix` for more details.
+            add_to_child_: If :obj:`True`, will add the metrics to the nearest
+                child loop instead of adding to this loop, if any child loop
+                context is currently open.
         """
-        def collect(target: Dict[str, Any]):
-            if metrics_:
-                for key, val in metrics_.items():
-                    key = stage_type.add_metric_prefix(key)
-                    target[key] = to_number_or_numpy(val)
-            if kwargs:
-                for key, val in kwargs.items():
-                    key = stage_type.add_metric_prefix(key)
-                    target[key] = to_number_or_numpy(val)
-
-        stage_type = self._stage.type
-        if self._stage.batch.is_active:
-            collect(self._batch_metrics)
-        elif self._stage.epoch is not None and self._stage.epoch.is_active:
-            collect(self._epoch_metrics)
+        if self._child_stack and add_to_child_:
+            self._child_stack[-1].add_metrics(metrics_, **kwargs)
         else:
-            collect(self._stage_metrics)
+            def collect(target: Dict[str, Any]):
+                if metrics_:
+                    for key, val in metrics_.items():
+                        key = stage_type.add_metric_prefix(key)
+                        target[key] = to_number_or_numpy(val)
+                if kwargs:
+                    for key, val in kwargs.items():
+                        key = stage_type.add_metric_prefix(key)
+                        target[key] = to_number_or_numpy(val)
+
+            stage_type = self._stage.type
+            if self._stage.batch.is_active:
+                collect(self._batch_metrics)
+            elif self._stage.epoch is not None and self._stage.epoch.is_active:
+                collect(self._epoch_metrics)
+            else:
+                collect(self._stage_metrics)
 
     @contextmanager
     def timeit(self, metric_name: str):
@@ -401,9 +418,6 @@ class BaseLoop(metaclass=DocInherit):
             excludes=excludes,
         )
 
-        # the function to add metric prefix
-        add_metric_prefix = self._stage.type.add_metric_prefix
-
         # now run the batches
         g = self.iter_batches(data_generator, limit=limit, count=count)
         try:
@@ -445,9 +459,13 @@ class BaseLoop(metaclass=DocInherit):
                                f're-entrant.')
         self._stage_metrics.clear()
         self._stage.enter()
+        if self.parent is not None:
+            self.parent._child_stack.append(self)
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
+        if self.parent is not None:
+            self.parent._child_stack.pop()
         self._stage.exit(self._stage_metrics)
 
 
@@ -675,7 +693,8 @@ class TrainLoop(BaseLoop):
         """
         return ValidationLoop(
             remote_doc=self._remote_doc,
-            callbacks=self._callbacks
+            callbacks=self._callbacks,
+            parent=self,
         )
 
     def test(self) -> 'TestLoop':
@@ -687,7 +706,8 @@ class TrainLoop(BaseLoop):
         """
         return TestLoop(
             remote_doc=self._remote_doc,
-            callbacks=self._callbacks
+            callbacks=self._callbacks,
+            parent=self,
         )
 
     def predict(self) -> 'PredictLoop':
@@ -699,7 +719,8 @@ class TrainLoop(BaseLoop):
         """
         return PredictLoop(
             remote_doc=self._remote_doc,
-            callbacks=self._callbacks
+            callbacks=self._callbacks,
+            parent=self,
         )
 
     def __enter__(self):
@@ -765,11 +786,13 @@ class ValidationLoop(_BatchOnlyLoop):
 
     def __init__(self,
                  remote_doc: Optional[ExperimentDoc] = NOT_SET,
-                 callbacks: Sequence[Callback] = ()):
+                 callbacks: Sequence[Callback] = (),
+                 parent: Optional[BaseLoop] = None):
         super().__init__(
             stage=Stage(type=StageType.VALIDATION),
             remote_doc=remote_doc,
             callbacks=callbacks,
+            parent=parent,
         )
 
 
@@ -777,11 +800,13 @@ class TestLoop(_BatchOnlyLoop):
 
     def __init__(self,
                  remote_doc: Optional[ExperimentDoc] = NOT_SET,
-                 callbacks: Sequence[Callback] = ()):
+                 callbacks: Sequence[Callback] = (),
+                 parent: Optional[BaseLoop] = None):
         super().__init__(
             stage=Stage(type=StageType.TEST),
             remote_doc=remote_doc,
             callbacks=callbacks,
+            parent=parent,
         )
 
 
@@ -792,11 +817,13 @@ class PredictLoop(_BatchOnlyLoop):
 
     def __init__(self,
                  remote_doc: Optional[ExperimentDoc] = NOT_SET,
-                 callbacks: Sequence[Callback] = ()):
+                 callbacks: Sequence[Callback] = (),
+                 parent: Optional[BaseLoop] = None):
         super().__init__(
             stage=Stage(type=StageType.PREDICT),
             remote_doc=remote_doc,
             callbacks=callbacks,
+            parent=parent,
         )
 
 
