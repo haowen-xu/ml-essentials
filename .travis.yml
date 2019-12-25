@@ -6,7 +6,7 @@ dist: xenial
 sudo: true
 install:
   - sudo apt-get update && sudo apt-get -y install unrar
-  - pip install --upgrade -y coverage coveralls
+  - pip install --upgrade coverage coveralls
   - pip install -r requirements-dev.txt
   - pip install torch
   # pip install 'tensorflow>=2.0' keras
