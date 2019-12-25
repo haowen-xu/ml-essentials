@@ -6,6 +6,7 @@ dist: xenial
 sudo: true
 install:
   - sudo apt-get update && sudo apt-get -y install unrar
+  - pip install --upgrade -y coverage coveralls
   - pip install -r requirements-dev.txt
   - pip install torch
   # pip install 'tensorflow>=2.0' keras
@@ -19,6 +20,6 @@ script:
 #  # run tests for `mltk.integration.keras` with TensorFlow 2.0
 #  - KERAS_BACKEND=tensorflow coverage run -a -m pytest mltk/integration/keras_tests.py
   # run tests for `mltk.integration.pytorch`
-  - PYTHONPATH=$(pwd) coverage run -a -m pytest mltk/integration/pytorch_tests.py
+  - PYTHONPATH=$(pwd):${PYTHONPATH} coverage run -a -m pytest mltk/integration/pytorch_tests.py
 after_success:
   - coveralls
