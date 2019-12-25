@@ -5,8 +5,8 @@ from dataclasses import dataclass
 
 import pytest
 
-from mltk import PatternType
 from mltk.parsing import ProgramOutputReceiver, ProgramOutputParser, ProgramInfo
+from mltk.typing_ import *
 
 
 class ProgramOutputReceiverTestCase(unittest.TestCase):

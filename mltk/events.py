@@ -3,9 +3,6 @@ from typing import *
 __all__ = ['Event', 'EventHost']
 
 
-TCallback = Callable[..., None]
-
-
 class Event(object):
     """
     Event object, should only be constructed by :class:`EventHost`.
@@ -19,7 +16,7 @@ class Event(object):
     def __repr__(self):
         return f'Event({self._name})'
 
-    def do(self, callback: TCallback):
+    def do(self, callback: Callable[..., None]):
         """
         Register `callback` to this event.
 
@@ -29,7 +26,7 @@ class Event(object):
         self._callbacks.append(callback)
         return callback
 
-    def cancel_do(self, callback: TCallback):
+    def cancel_do(self, callback: Callable[..., None]):
         """
         Unregister `callback` from this event.
 

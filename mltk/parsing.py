@@ -7,7 +7,7 @@ from threading import Condition, Thread, Semaphore
 from typing import *
 
 from .events import EventHost
-from .utils import PatternType
+from .typing_ import *
 
 __all__ = [
     # program info data classes
@@ -94,10 +94,7 @@ class ProgramOutputParser(Generic[TInfo], metaclass=ABCMeta):
         """
 
 
-BytesPatternType = Union[bytes, str, PatternType]
-
-
-def re_compile_bytes(pattern: BytesPatternType) -> PatternType:
+def re_compile_bytes(pattern: Union[bytes, str, PatternType]) -> PatternType:
     """
     Compile a bytes regex pattern.
 
@@ -251,7 +248,9 @@ class GeneralWebUIOutputParser(ProgramOutputParser[ProgramWebUIInfo]):
         rb'(?:^Serving HTTP on \S+ port \d+ \((?P<SimpleHTTP>[^()]+)\))'
     )
 
-    def __init__(self, patterns: Optional[Sequence[BytesPatternType]] = None):
+    def __init__(self, patterns: Optional[Sequence[Union[bytes,
+                                                         str,
+                                                         PatternType]]] = None):
         """
         Construct a new :class:`GeneralWebUIOutputParser`.
 

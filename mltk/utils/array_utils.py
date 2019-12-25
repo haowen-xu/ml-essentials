@@ -2,6 +2,7 @@ from typing import *
 
 import numpy as np
 
+from ..typing_ import *
 from .misc import generate_random_seed
 
 __all__ = [
@@ -10,7 +11,7 @@ __all__ = [
 ]
 
 
-def get_array_shape(arr) -> Tuple[int, ...]:
+def get_array_shape(arr) -> ArrayShape:
     """
     Inspect the shape of an array-like object.
 

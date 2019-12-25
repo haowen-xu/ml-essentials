@@ -24,17 +24,15 @@ import click
 from .config import Config, ConfigLoader, field_checker, validate_config
 from .events import EventHost, Event
 from .formatting import format_key_values
-from .mlstorage import (DocumentType, MLStorageClient, ExperimentDoc,
-                        normalize_relpath)
+from .mlstorage import MLStorageClient, ExperimentDoc, normalize_relpath
 from .parsing import *
-from .utils import exec_proc, json_loads, parse_tags, PatternType
+from .typing_ import *
+from .utils import exec_proc, json_loads, parse_tags
 
 __all__ = ['MLRunnerConfig', 'MLRunner']
 
 LOG_LEVEL = 'INFO'
 LOG_FORMAT = '%(asctime)s [%(levelname)-8s] %(message)s'
-
-CommandOrArgsType = Union[List[str], Tuple[str, ...], str]
 
 
 class MLRunnerConfig(Config):

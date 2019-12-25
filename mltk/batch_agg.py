@@ -13,8 +13,6 @@ __all__ = [
     'BatchAggregator', 'BatchAggregatorDict',
 ]
 
-BatchAggregatorFactory = Callable[[], 'BatchOutputAggregator']
-
 
 class BatchAggregationMode(str, Enum):
 
@@ -260,7 +258,8 @@ class BatchAggregatorDict(Mapping[str, BatchAggregator]):
     def __init__(self,
                  aggregators: Mapping[str, BatchAggregator],
                  excludes: Sequence[str] = (),
-                 default_factory: Optional[BatchAggregatorFactory] = None):
+                 default_factory: Optional[
+                     Callable[[], BatchAggregator]] = None):
         """
         Construct a new :class:`BatchAggregatorDict`.
 

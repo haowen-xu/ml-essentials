@@ -13,9 +13,10 @@ import yaml
 
 from .utils import *
 from .type_check import *
+from .typing_ import *
 
 __all__ = [
-    'ConfigValidationError', 'PatternType',
+    'ConfigValidationError',
     'field_checker', 'root_checker', 'config_field', 'ConfigField',
     'config_params', 'get_config_params', 'ConfigMeta',
     'Config', 'validate_config', 'config_to_dict', 'config_defaults',
@@ -33,7 +34,6 @@ _PARAMS_CLASS_NAME = '__ConfigParams__'  # nested class as config parameters
 
 # special attributes of a Config classmethod
 _CHECKER_PARAMS = '__mltk_config_checker_params__'
-TConfig = TypeVar('TConfig')
 
 
 ConfigValidationError = TypeCheckError

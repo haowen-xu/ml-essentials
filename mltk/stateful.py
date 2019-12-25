@@ -5,13 +5,9 @@ from typing import *
 import numpy as np
 
 __all__ = [
-    'StateDictType',
     'StatefulObject', 'SimpleStatefulObject', 'StatefulObjectGroup',
     'StateSaver',
 ]
-
-StateDictType = Dict[str, Any]
-StatefulObjectTypes = Union['StatefulObjectGroup', Dict[str, 'StatefulObject']]
 
 
 class StatefulObject(object):
@@ -32,10 +28,10 @@ class StatefulObject(object):
                 self.value = state['value']
     """
 
-    def get_state_dict(self) -> StateDictType:
+    def get_state_dict(self) -> Dict[str, Any]:
         raise NotImplementedError()
 
-    def set_state_dict(self, state: StateDictType):
+    def set_state_dict(self, state: Dict[str, Any]):
         raise NotImplementedError()
 
 
@@ -52,10 +48,10 @@ class SimpleStatefulObject(StatefulObject):
     (456, 789)
     """
 
-    def get_state_dict(self) -> StateDictType:
+    def get_state_dict(self) -> Dict[str, Any]:
         return self.__dict__
 
-    def set_state_dict(self, state: StateDictType):
+    def set_state_dict(self, state: Dict[str, Any]):
         self.__dict__.update(state)
 
 
@@ -147,7 +143,7 @@ class StatefulObjectGroup(StatefulObject, Mapping[str, StatefulObject]):
             raise TypeError(f'`obj` is not a StatefulObject: {obj!r}')
         self._objects[prefix] = obj
 
-    def get_state_dict(self) -> StateDictType:
+    def get_state_dict(self) -> Dict[str, Any]:
         """Get the state dict."""
         ret = {}
         for prefix, obj in self._objects.items():
@@ -155,7 +151,7 @@ class StatefulObjectGroup(StatefulObject, Mapping[str, StatefulObject]):
                 ret[f'{prefix}.{key}'] = value
         return ret
 
-    def set_state_dict(self, state: StateDictType):
+    def set_state_dict(self, state: Dict[str, Any]):
         """
         Set the state dict.
 
@@ -214,7 +210,8 @@ class StateSaver(object):
     """
 
     def __init__(self,
-                 object_or_objects: StatefulObjectTypes,
+                 object_or_objects: Union['StatefulObjectGroup',
+                                          Dict[str, 'StatefulObject']],
                  pickle_protocol=pkl.HIGHEST_PROTOCOL):
         """
         Construct a new :class:`StateSaver`.

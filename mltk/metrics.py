@@ -7,8 +7,7 @@ from typing import *
 
 import numpy as np
 
-
-RealValue = Union[float, np.ndarray]
+from .typing_ import *
 
 __all__ = [
     'MetricStats',
@@ -23,12 +22,12 @@ class MetricStats(object):
 
     __slots__ = ('mean', 'var', 'std')
 
-    mean: RealValue
-    var: Optional[RealValue]
-    std: Optional[RealValue]
+    mean: MetricValue
+    var: Optional[MetricValue]
+    std: Optional[MetricValue]
 
     def to_json(self, mean_only: bool = False
-                ) -> Union[RealValue, Dict[str, RealValue]]:
+                ) -> Union[MetricValue, Dict[str, MetricValue]]:
         """
         Get the JSON representation of this metric stats object.
 
@@ -72,7 +71,7 @@ class MetricCollector(object):
         """
         raise NotImplementedError()
 
-    def update(self, values: RealValue, weight: RealValue = 1.):
+    def update(self, values: MetricValue, weight: MetricValue = 1.):
         """
         Update the metric statistics from values.
 
@@ -145,13 +144,13 @@ class GeneralMetricCollector(MetricCollector):
                  'counter', 'weight_sum', '_array_to_value_type',
                  '_value')
 
-    shape: Tuple[int, ...]
+    shape: ArrayShape
     dtype: np.dtype
     mean: np.ndarray
     second_order_moment: np.ndarray
     counter: int  # count the number of times where `add` is called
     weight_sum: float  # sum of all weights of added values
-    _array_to_value_type: Callable[[Any], RealValue]
+    _array_to_value_type: Callable[[Any], MetricValue]
     _value: Optional[MetricStats]
 
     def __init__(self,
@@ -194,7 +193,7 @@ class GeneralMetricCollector(MetricCollector):
             self._make_value()
         return self._value
 
-    def update(self, values: RealValue, weight: RealValue = 1.):
+    def update(self, values: MetricValue, weight: MetricValue = 1.):
         values = np.asarray(values)
         if not values.size:
             return
@@ -294,7 +293,7 @@ class ScalarMetricCollector(MetricCollector):
         elif self.counter > 0:
             return MetricStats(mean=self.mean, var=None, std=None)
 
-    def update(self, values: RealValue, weight: RealValue = 1.):
+    def update(self, values: MetricValue, weight: MetricValue = 1.):
         if np.shape(weight) == ():
             batch_size = float(reduce(operator.mul, np.shape(values), 1.))
             batch_weight = float(weight * batch_size)
@@ -378,7 +377,7 @@ class ScalarMetricsLogger(Mapping[str, GeneralMetricCollector]):
         """Clear all collected metrics."""
         self._metrics.clear()
 
-    def update(self, metrics: Mapping[str, RealValue], weight: float = 1.):
+    def update(self, metrics: Mapping[str, MetricValue], weight: float = 1.):
         """
         Update metrics with new values.
 
@@ -391,7 +390,7 @@ class ScalarMetricsLogger(Mapping[str, GeneralMetricCollector]):
                 self._metrics[key] = ScalarMetricCollector()
             self._metrics[key].update(val, weight)
 
-    def replace(self, metrics: Mapping[str, RealValue], weight: float = 1.):
+    def replace(self, metrics: Mapping[str, MetricValue], weight: float = 1.):
         """
         Replace metrics with new values.
 
@@ -413,7 +412,7 @@ class ScalarMetricsLogger(Mapping[str, GeneralMetricCollector]):
             self._metrics[key].update(val, weight)
 
     def to_json(self, mean_only: bool = False
-                ) -> Dict[str, Union[RealValue, Dict[str, RealValue]]]:
+                ) -> Dict[str, Union[MetricValue, Dict[str, MetricValue]]]:
         """
         Get the JSON representation of collected metrics.
 

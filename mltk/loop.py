@@ -12,20 +12,12 @@ from .data import DataStream
 from .events import Event, EventHost
 from .mlstorage import ExperimentDoc
 from .stage import Stage, StageType
+from .typing_ import *
 from .utils import to_number_or_numpy, get_array_shape, ALL, NOT_SET, DocInherit
 
 __all__ = [
     'TrainLoop', 'ValidationLoop', 'TestLoop', 'PredictLoop',
 ]
-
-BatchArrayTuple = Tuple[np.ndarray, ...]
-BatchArrays = Union[BatchArrayTuple, List[np.ndarray]]
-BatchGeneratorType = Generator[
-    Union[int, Tuple[int, BatchArrayTuple]],
-    None,
-    None
-]
-AggregatorDict = Mapping[str, BatchAggregator]
 
 
 class _BaseLoopEventCallback(Callback):
@@ -234,10 +226,11 @@ class BaseLoop(metaclass=DocInherit):
             self.add_metrics({metric_name: time.time() - start_time})
 
     def _iter_batches(self,
-                      data_generator: Optional[Iterable[BatchArrays]] = None,
+                      data_generator: Optional[
+                          Iterable[ArrayTupleOrList]] = None,
                       limit: Optional[int] = None,
                       count: Optional[int] = None,
-                      ) -> BatchGeneratorType:
+                      ) -> BatchGenerator:
         # inspect the data generator to complete the total number of batches,
         # if `limit` and `count` is not specified
         if data_generator is not None and count is None and limit is None:
@@ -312,10 +305,11 @@ class BaseLoop(metaclass=DocInherit):
                 data_iterator.close()
 
     def iter_batches(self,
-                     data_generator: Optional[Iterable[BatchArrays]] = None,
+                     data_generator: Optional[
+                         Iterable[ArrayTupleOrList]] = None,
                      limit: Optional[int] = None,
                      count: Optional[int] = None,
-                     ) -> BatchGeneratorType:
+                     ) -> BatchGenerator:
         """
         Iterate through the batches.
 
@@ -370,7 +364,7 @@ class BaseLoop(metaclass=DocInherit):
 
     def run_batches(self,
                     fn: Callable[..., Optional[Dict[str, Any]]],
-                    data_generator: Iterable[BatchArrays],
+                    data_generator: Iterable[ArrayTupleOrList],
                     limit: Optional[int] = None,
                     count: Optional[int] = None,
                     metrics: Union[Sequence[str], type(ALL)] = NOT_SET,
@@ -528,10 +522,11 @@ class TrainLoop(BaseLoop):
         return self._stage.epoch.total
 
     def iter_batches(self,
-                     data_generator: Optional[Iterable[BatchArrays]] = None,
+                     data_generator: Optional[
+                         Iterable[ArrayTupleOrList]] = None,
                      limit: Optional[int] = None,
                      count: Optional[int] = None
-                     ) -> BatchGeneratorType:
+                     ) -> BatchGenerator:
         if not self._stage.epoch.is_active:
             raise RuntimeError(
                 'The batch loop can only be open inside an epoch loop.  '
@@ -608,7 +603,7 @@ class TrainLoop(BaseLoop):
 
     def run_epochs(self,
                    fn: Callable[..., Optional[Dict[str, Any]]],
-                   data_generator: Iterable[BatchArrays],
+                   data_generator: Iterable[ArrayTupleOrList],
                    limit: Optional[int] = None,
                    count: Optional[int] = None,
                    metrics: Union[Sequence[str], type(ALL)] = NOT_SET,
@@ -650,7 +645,7 @@ class TrainLoop(BaseLoop):
 
     def run(self,
             fn: Callable[..., Optional[Dict[str, Any]]],
-            data_generator: Iterable[BatchArrays],
+            data_generator: Iterable[ArrayTupleOrList],
             metrics: Union[Sequence[str], type(ALL)] = NOT_SET,
             excludes: Sequence[str] = ()
             ) -> Optional[Dict[str, Any]]:
@@ -740,7 +735,7 @@ class _BatchOnlyLoop(BaseLoop):
 
     def run(self,
             fn: Callable[..., Optional[Dict[str, Any]]],
-            data_generator: Iterable[BatchArrays],
+            data_generator: Iterable[ArrayTupleOrList],
             metrics: Union[Sequence[str], type(ALL)] = NOT_SET,
             outputs: Union[Sequence[str], type(ALL)] = NOT_SET,
             aggregators: Optional[Mapping[str, BatchAggregator]] = None,

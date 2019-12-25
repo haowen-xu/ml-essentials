@@ -1,6 +1,5 @@
 import copy
 import os
-import re
 import threading
 from contextlib import contextmanager
 from typing import *
@@ -8,20 +7,15 @@ from typing import *
 import numpy as np
 from heapdict import heapdict
 
+from ..typing_ import *
+
 __all__ = [
-    'PatternType', 'Singleton',
-    'NOT_SET', 'ALL',
+    'Singleton', 'NOT_SET', 'ALL',
     'generate_random_seed',
     'optional_apply',  'validate_enum_arg', 'maybe_close', 'iter_files',
     'InheritanceDict', 'CachedInheritanceDict', 'parse_tags', 'deep_copy',
     'ContextStack', 'GeneratorIterator',
 ]
-
-PatternType = type(re.compile('x'))
-TArgValue = TypeVar('TArgValue')
-TValue = TypeVar('TValue')
-TContextObject = TypeVar('TContextObject')
-ContextObjectFactoryType = Callable[[], TContextObject]
 
 
 class Singleton(object):
@@ -130,9 +124,9 @@ def optional_apply(f, value):
 
 
 def validate_enum_arg(arg_name: str,
-                      arg_value: Optional[TArgValue],
-                      choices: Iterable[TArgValue],
-                      nullable: bool = False) -> Optional[TArgValue]:
+                      arg_value: Optional[TObject],
+                      choices: Iterable[TObject],
+                      nullable: bool = False) -> Optional[TObject]:
     """
     Validate the value of an enumeration argument.
 
@@ -417,7 +411,7 @@ def deep_copy(value: TValue) -> TValue:
             del copy._deepcopy_dispatch[PatternType]
 
 
-class ContextStack(Generic[TContextObject]):
+class ContextStack(Generic[TObject]):
     """
     A thread-local context stack for general purpose.
 
@@ -430,7 +424,7 @@ class ContextStack(Generic[TContextObject]):
     """
 
     def __init__(self,
-                 initial_factory: Optional[ContextObjectFactoryType] = None):
+                 initial_factory: Optional[Callable[[], TObject]] = None):
         """
         Construct a new instance of :class:`ContextStack`.
 
@@ -442,7 +436,7 @@ class ContextStack(Generic[TContextObject]):
         self._initial_factory = initial_factory
 
     @property
-    def items(self) -> List[TContextObject]:
+    def items(self) -> List[TObject]:
         if not hasattr(self._thread_local, 'items'):
             items = []
             if self._initial_factory is not None:
@@ -450,7 +444,7 @@ class ContextStack(Generic[TContextObject]):
             setattr(self._thread_local, 'items', items)
         return self._thread_local.items
 
-    def push(self, obj: TContextObject) -> None:
+    def push(self, obj: TObject) -> None:
         """
         Push an object to the context stack.
 
@@ -459,7 +453,7 @@ class ContextStack(Generic[TContextObject]):
         """
         self.items.append(obj)
 
-    def pop(self) -> TContextObject:
+    def pop(self) -> TObject:
         """
         Pop an object from the context stack.
 
@@ -471,7 +465,7 @@ class ContextStack(Generic[TContextObject]):
         """
         return self.items.pop()
 
-    def top(self) -> Optional[TContextObject]:
+    def top(self) -> Optional[TObject]:
         """
         Get the top item of the context stack. or :obj:`None` if the
         context stack is empty.

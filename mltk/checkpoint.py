@@ -9,9 +9,13 @@ from typing import *
 
 from .stateful import StatefulObject, StatefulObjectGroup, StateSaver
 
-__all__ = ['BaseCheckpoint', 'CheckpointManager']
+__all__ = ['Checkpointable', 'BaseCheckpoint', 'CheckpointManager']
 
-StatefulObjects = Union[StatefulObject, Dict[str, StatefulObject]]
+Checkpointable = Union[StatefulObject, Dict[str, StatefulObject]]
+"""
+Type of objects that can be saved and restored as `state_objects` via
+:meth:`save()` and :meth:`restore()` of :class:`BaseCheckpoint`. 
+"""
 
 
 class BaseCheckpoint(object):
@@ -30,7 +34,7 @@ class BaseCheckpoint(object):
 
     def save(self,
              checkpoint_dir: str,
-             state_objects: Optional[StatefulObjects] = None,
+             state_objects: Optional[Checkpointable] = None,
              overwrite: bool = False) -> None:
         """
         Save checkpoint to `checkpoint_dir`.
@@ -70,7 +74,7 @@ class BaseCheckpoint(object):
 
     def restore(self,
                 checkpoint_dir: str,
-                state_objects: Optional[StatefulObjects] = None) -> None:
+                state_objects: Optional[Checkpointable] = None) -> None:
         """
         Restore checkpoint from `checkpoint_dir`.
 
@@ -196,7 +200,7 @@ class CheckpointManager(object):
     checkpoint: BaseCheckpoint
     """The checkpoint object to be saved and restored."""
 
-    state_objects: Optional[StatefulObjects]
+    state_objects: Optional[Checkpointable]
     """The state objects to be saved and restored."""
 
     root_dir: str
@@ -214,7 +218,7 @@ class CheckpointManager(object):
     def __init__(self,
                  checkpoint: BaseCheckpoint,
                  root_dir: str,
-                 state_objects: Optional[StatefulObjects] = None,
+                 state_objects: Optional[Checkpointable] = None,
                  checkpoint_index_file: str = 'checkpoint.json',
                  max_to_keep: Optional[int] = None):
         """

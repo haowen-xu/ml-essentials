@@ -10,8 +10,6 @@ from typing import *
 
 __all__ = ['timed_wait_proc', 'exec_proc']
 
-OutputCallbackType = Callable[[bytes], None]
-
 
 def timed_wait_proc(proc: subprocess.Popen, timeout: float) -> Optional[int]:
     """
@@ -94,8 +92,8 @@ def recursive_kill(proc: subprocess.Popen,
 
 @contextmanager
 def exec_proc(args: Union[str, Iterable[str]],
-              on_stdout: OutputCallbackType = None,
-              on_stderr: OutputCallbackType = None,
+              on_stdout: Callable[[bytes], None] = None,
+              on_stderr: Callable[[bytes], None] = None,
               stderr_to_stdout: bool = False,
               buffer_size: int = 16 * 1024,
               ctrl_c_timeout: float = 3,

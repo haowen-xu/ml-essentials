@@ -4,7 +4,7 @@ from typing import *
 import torch
 
 from ..checkpoint import BaseCheckpoint
-from ..stateful import StatefulObject, StateDictType
+from ..stateful import StatefulObject
 
 __all__ = ['TorchCheckpoint']
 
@@ -15,10 +15,10 @@ class _TorchCheckpointableObject(StatefulObject):
     def __init__(self, torch_object):
         self.torch_object = torch_object
 
-    def get_state_dict(self) -> StateDictType:
+    def get_state_dict(self) -> Dict[str, Any]:
         return self.torch_object.state_dict()
 
-    def set_state_dict(self, state: StateDictType):
+    def set_state_dict(self, state: Dict[str, Any]):
         self.torch_object.load_state_dict(state)
 
 

@@ -15,11 +15,9 @@ from .mlstorage import MLStorageClient, ExperimentDoc
 from .utils import (NOT_SET, make_dir_archive, json_dumps, json_loads,
                     ContextStack)
 from .utils.remote_doc import merge_updates_into_doc
+from .typing_ import TConfig
 
 __all__ = ['Experiment', 'get_active_experiment']
-
-TConfig = TypeVar('TConfig')
-ResultDict = Dict[str, Any]
 
 
 class Experiment(Generic[TConfig]):
@@ -307,7 +305,9 @@ class Experiment(Generic[TConfig]):
             immediately=True
         )
 
-    def update_results(self, results: Optional[ResultDict] = None, **kwargs):
+    def update_results(self,
+                       results: Optional[Dict[str, Any]] = None,
+                       **kwargs):
         """
         Update the result dict.
 

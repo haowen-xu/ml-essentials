@@ -4,9 +4,9 @@ import unittest
 import pytest
 from mock import Mock
 
+from mltk.typing_ import *
 from mltk.utils import *
-from mltk.utils.remote_doc import (DocumentType, merge_updates,
-                                   merge_updates_into_doc)
+from mltk.utils.remote_doc import merge_updates, merge_updates_into_doc
 
 
 class MyError(Exception):

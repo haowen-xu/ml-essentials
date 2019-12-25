@@ -5,13 +5,12 @@ from logging import getLogger
 from threading import Thread, Condition, Semaphore
 from typing import *
 
+from ..typing_ import *
+from .misc import deep_copy
+
 __all__ = [
     'RemoteUpdateMode', 'RemoteDoc',
 ]
-
-from .misc import deep_copy
-
-DocumentType = Dict[str, Any]
 
 
 def merge_updates(target: DocumentType,

@@ -25,10 +25,6 @@ __all__ = [
 ]
 
 
-ProgressDict = MetricsDict = Dict[str, Any]
-ConsoleWriter = Callable[[str], None]
-
-
 @dataclass
 class CallbackData(object):
     """
@@ -56,7 +52,7 @@ class CallbackData(object):
     exc_time: Optional[float]
     """Execution time of the stage/epoch/batch, available at the cycle end."""
 
-    metrics: Optional[MetricsDict]
+    metrics: Optional[Dict[str, Any]]
     """Metrics dict, available at the cycle end."""
 
 
@@ -298,7 +294,7 @@ def _console_writer(s: str) -> None:
     sys.stdout.flush()
 
 
-def _print_log(console_writer: Optional[ConsoleWriter],
+def _print_log(console_writer: Optional[Callable[[str], None]],
                text: str,
                nl: bool = True,
                show_time: bool = True):
@@ -386,7 +382,7 @@ class LoggerCallback(Callback):
     console_mode: LoggerMode
     """The console logger mode."""
 
-    console_writer: Optional[ConsoleWriter]
+    console_writer: Optional[Callable[[str], None]]
     """The console writer."""
 
     console_log_batch_freq: int
@@ -406,7 +402,8 @@ class LoggerCallback(Callback):
 
     def __init__(self,
                  console_mode: LoggerMode = LoggerMode.DEFAULT,
-                 console_writer: ConsoleWriter = _console_writer,
+                 console_writer: Optional[
+                     Callable[[str], None]] = _console_writer,
                  console_log_batch_freq: int = 100,
                  console_log_interval: float = 10.,
                  remote_doc: Optional[ExperimentDoc] = NOT_SET,

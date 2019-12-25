@@ -11,12 +11,10 @@ from bson import ObjectId
 from cachetools import LRUCache
 from urllib.parse import quote as urlquote
 
+from .typing_ import *
 from .utils import json_dumps, json_loads, RemoteDoc
 
 __all__ = ['MLStorageClient', 'ExperimentDoc']
-
-DocumentType = FilterType = Dict[str, Any]
-IdType = Union[ObjectId, str]
 
 _PATH_SEP_SPLITTER = re.compile(r'[/\\]')
 _INVALID_PATH_CHARS = re.compile(r'[<>:"|?*]')
@@ -155,7 +153,7 @@ class MLStorageClient(object):
             self._update_storage_dir_cache(doc)
         return ret
 
-    def get(self, id: IdType) -> DocumentType:
+    def get(self, id: ExperimentId) -> DocumentType:
         """
         Get the document of an experiment by its `id`.
 
@@ -169,7 +167,7 @@ class MLStorageClient(object):
         self._update_storage_dir_cache(ret)
         return ret
 
-    def heartbeat(self, id: IdType) -> None:
+    def heartbeat(self, id: ExperimentId) -> None:
         """
         Send heartbeat packet for the experiment `id`.
 
@@ -193,7 +191,7 @@ class MLStorageClient(object):
         self._update_storage_dir_cache(ret)
         return ret
 
-    def update(self, id: IdType, doc_fields: DocumentType) -> DocumentType:
+    def update(self, id: ExperimentId, doc_fields: DocumentType) -> DocumentType:
         """
         Update the document of an experiment.
 
@@ -208,7 +206,7 @@ class MLStorageClient(object):
         self._update_storage_dir_cache(ret)
         return ret
 
-    def add_tags(self, id: IdType, tags: Iterable[str]) -> DocumentType:
+    def add_tags(self, id: ExperimentId, tags: Iterable[str]) -> DocumentType:
         """
         Add tags to an experiment document.
 
@@ -226,7 +224,7 @@ class MLStorageClient(object):
                 new_tags.append(tag)
         return self.update(id, {'tags': new_tags})
 
-    def delete(self, id: IdType) -> List[IdType]:
+    def delete(self, id: ExperimentId) -> List[ExperimentId]:
         """
         Delete an experiment.
 
@@ -242,7 +240,7 @@ class MLStorageClient(object):
         return ret
 
     def set_finished(self,
-                     id: IdType,
+                     id: ExperimentId,
                      status: str,
                      doc_fields: Optional[DocumentType] = None
                      ) -> DocumentType:
@@ -263,7 +261,7 @@ class MLStorageClient(object):
         self._update_storage_dir_cache(ret)
         return ret
 
-    def get_storage_dir(self, id: IdType) -> str:
+    def get_storage_dir(self, id: ExperimentId) -> str:
         """
         Get the storage directory of an experiment.
 
@@ -280,7 +278,7 @@ class MLStorageClient(object):
             storage_dir = doc['storage_dir']
         return storage_dir
 
-    def get_file(self, id: IdType, path: str) -> bytes:
+    def get_file(self, id: ExperimentId, path: str) -> bytes:
         """
         Get the content of a file in the storage directory of an experiment.
 
@@ -301,12 +299,12 @@ class ExperimentDoc(RemoteDoc):
     """:class:`RemoteDoc` class for experiment document."""
 
     client: Optional[MLStorageClient]
-    id: Optional[IdType]
+    id: Optional[ExperimentId]
     has_set_finished: bool = False
 
     def __init__(self,
                  client: Optional[MLStorageClient] = None,
-                 id: Optional[IdType] = None,
+                 id: Optional[ExperimentId] = None,
                  enable_heartbeat: bool = True):
         """
         Construct a new :class:`ExperimentDoc`.

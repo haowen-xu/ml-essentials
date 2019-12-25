@@ -3,13 +3,12 @@ from enum import Enum
 from typing import *
 
 from .utils import NOT_SET
-from .stateful import StatefulObject, StateDictType
+from .stateful import StatefulObject
 
 __all__ = [
     'CycleCounter', 'TimedCycleCounter', 'StageType', 'Stage',
 ]
 
-MetricsDict = Dict[str, Any]
 FIRST_CYCLE_INDEX = 1
 
 
@@ -250,7 +249,7 @@ class _StageCounterState(StatefulObject):
     def __init__(self, stage: 'Stage'):
         self.stage = stage
 
-    def get_state_dict(self) -> StateDictType:
+    def get_state_dict(self) -> Dict[str, Any]:
         ret = {}
 
         def get_counter(counter: CycleCounter,
@@ -270,7 +269,7 @@ class _StageCounterState(StatefulObject):
         ret['memo'] = self.stage.memo
         return ret
 
-    def set_state_dict(self, state: StateDictType):
+    def set_state_dict(self, state: Dict[str, Any]):
         if self.stage.epoch is not None:
             self.stage.epoch.index = state['epoch']
         if self.stage.batch is not None:
@@ -453,7 +452,7 @@ class Stage(object):
             cb.on_stage_begin(event_data)
             getattr(cb, event_name)(event_data)
 
-    def exit(self, metrics: Optional[MetricsDict] = None):
+    def exit(self, metrics: Optional[Dict[str, Any]] = None):
         try:
             self.end_timestamp = time.time()
 
@@ -501,7 +500,7 @@ class Stage(object):
             getattr(cb, event_name)(event_data)
 
     def exit_epoch(self,
-                   metrics: Optional[MetricsDict] = None):
+                   metrics: Optional[Dict[str, Any]] = None):
         if self.epoch is None:
             raise RuntimeError(f'Stage {self!r} does not have an epoch '
                                f'counter.')
@@ -553,7 +552,7 @@ class Stage(object):
             getattr(cb, event_name)(event_data)
 
     def exit_batch(self,
-                   metrics: Optional[MetricsDict] = None):
+                   metrics: Optional[Dict[str, Any]] = None):
         self.batch.pre_exit()
         try:
             # call the callbacks

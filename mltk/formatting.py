@@ -7,6 +7,7 @@ from terminaltables import AsciiTable
 from .config import Config, config_to_dict
 from .metrics import MetricStats
 from .utils import NOT_SET
+from .typing_ import *
 
 
 __all__ = [
@@ -14,13 +15,10 @@ __all__ = [
     'MetricsFormatter',
 ]
 
-KeyValuesType = Union[Dict, Config, Iterable[Tuple[str, Any]]]
-RealValue = Union[float, np.ndarray]
-MetricValueType = Union[RealValue, Mapping[str, RealValue], MetricStats]
-DurationType = Union[float, int, timedelta]
 
-
-def format_key_values(key_values: KeyValuesType,
+def format_key_values(key_values: Union[Dict,
+                                        Config,
+                                        Iterable[Tuple[str, Any]]],
                       title: Optional[str] = None,
                       formatter: Callable[[Any], str] = str,
                       delimiter_char: str = '=') -> str:
@@ -100,7 +98,7 @@ def format_key_values(key_values: KeyValuesType,
     return '\n'.join(lines)
 
 
-def format_duration(duration: DurationType,
+def format_duration(duration: Union[float, int, timedelta],
                     precision: int = 0,
                     count_down: bool = False) -> str:
     """
@@ -376,7 +374,9 @@ class MetricsFormatter(object):
         return f'{name}{sep}{val_str}'
 
     def format(self,
-               metrics: Mapping[str, MetricValueType],
+               metrics: Mapping[str, Union[MetricValue,
+                                           Mapping[str, MetricValue],
+                                           MetricStats]],
                known_names: Optional[Sequence[str]] = None,
                sep: Tuple[str, str] = NOT_SET) -> str:
         """

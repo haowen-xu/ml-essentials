@@ -13,7 +13,8 @@ from typing import *
 import numpy as np
 import yaml
 
-from .utils import NOT_SET, Singleton, deep_copy, PatternType
+from .typing_ import *
+from .utils import NOT_SET, Singleton, deep_copy
 
 __all__ = [
     'TypeCheckError', 'TypeCheckContext',
@@ -31,7 +32,6 @@ __all__ = [
     'VardicTupleTypeInfo', 'DictTypeInfo',
 ]
 
-TObject = TypeVar('TObject')
 TYPE_INFO_MAGIC_FIELD = '__type_info__'
 """If a class provides this magic field, :func:`type_info` will return it."""
 

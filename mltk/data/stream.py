@@ -6,6 +6,7 @@ from typing import *
 
 import numpy as np
 
+from ..typing_ import *
 from ..utils import (minibatch_slices_iterator, AutoInitAndCloseable, NOT_SET,
                      GeneratorIterator)
 
@@ -16,33 +17,23 @@ __all__ = [
     'MapperDataStream', 'ThreadingDataStream',
 ]
 
-ArrayType = Union[np.ndarray, Any]
-TupleOfArrays = Tuple[ArrayType, ...]
-TupleOfShapes = Tuple[Tuple[int, ...], ...]
-IterableOfArrays = Iterable[ArrayType]
-ListOfArrays = Iterable[ArrayType]
-RandomStateType = np.random.RandomState
-TReturn = TypeVar('TReturn')
-TMapper = Callable[..., Union[ArrayType, IterableOfArrays, ListOfArrays]]
-TGeneratorFactory = Callable[[], Generator[IterableOfArrays, None, None]]
 
-
-def map_to_tuple(fn: Callable[[Any], TReturn], seq: Iterable[Any]):
+def map_to_tuple(fn: Callable[[Any], TObject], seq: Iterable[Any]):
     return tuple(fn(s) for s in seq)
 
 
-def to_data_shapes(data_shapes) -> TupleOfShapes:
+def to_data_shapes(data_shapes) -> Tuple[ArrayShape, ...]:
     return map_to_tuple(lambda x: map_to_tuple(int, x), data_shapes)
 
 
-def to_readonly_array(arr: ArrayType) -> ArrayType:
+def to_readonly_array(arr: Array) -> Array:
     arr = np.asarray(arr)
     arr.setflags(write=False)
     return arr
 
 
-def ensure_batch_is_tuple(batch: Union[ArrayType, TupleOfArrays]
-                          ) -> TupleOfArrays:
+def ensure_batch_is_tuple(batch: Union[Array, ArrayTupleOrList]
+                          ) -> ArrayTuple:
     if not isinstance(batch, (tuple, list)):
         batch = (batch,)
     else:
@@ -181,9 +172,9 @@ class DataStream(object):
     def __init__(self,
                  batch_size: Optional[int] = None,
                  array_count: Optional[int] = None,
-                 data_shapes: Optional[TupleOfShapes] = None,
+                 data_shapes: Optional[Tuple[ArrayShape, ...]] = None,
                  data_length: Optional[int] = None,
-                 random_state: Optional[RandomStateType] = None):
+                 random_state: Optional[np.random.RandomState] = None):
         """
         Construct a :class:`DataStream`.
 
@@ -235,7 +226,7 @@ class DataStream(object):
         self._active_iterator = None
         self._auto_close_iterator_warning_printed = False
 
-    def __iter__(self) -> GeneratorIterator[TupleOfArrays]:
+    def __iter__(self) -> GeneratorIterator[ArrayTuple]:
         """
         Iterate through the mini-batches.
 
@@ -329,7 +320,7 @@ class DataStream(object):
         return self._array_count
 
     @property
-    def data_shapes(self) -> Optional[TupleOfShapes]:
+    def data_shapes(self) -> Optional[Tuple[ArrayShape, ...]]:
         """
         Get the data shapes.
 
@@ -375,7 +366,7 @@ class DataStream(object):
         return self._batch_count
 
     @property
-    def random_state(self) -> Optional[RandomStateType]:
+    def random_state(self) -> Optional[np.random.RandomState]:
         """Get the NumPy random state associated with this data stream."""
         return self._random_state
 
@@ -414,10 +405,10 @@ class DataStream(object):
             kwargs.setdefault(attr, getattr(self, attr))
         return self.__class__(**kwargs)
 
-    def _minibatch_iterator(self) -> Generator[TupleOfArrays, None, None]:
+    def _minibatch_iterator(self) -> Generator[ArrayTuple, None, None]:
         raise NotImplementedError()
 
-    def get_arrays(self) -> TupleOfArrays:
+    def get_arrays(self) -> ArrayTuple:
         """
         Collecting mini-batches into NumPy arrays.
 
@@ -469,7 +460,7 @@ class DataStream(object):
                          batch_size: int = NOT_SET,
                          shuffle: bool = False,
                          skip_incomplete: bool = False,
-                         random_state: Optional[RandomStateType] = NOT_SET
+                         random_state: Optional[np.random.RandomState] = NOT_SET
                          ) -> 'ArraysDataStream':
         """
         Convert this data-flow to an arrays stream.
@@ -535,11 +526,11 @@ class DataStream(object):
 
     # -------- here starts the factory methods --------
     @staticmethod
-    def arrays(arrays: IterableOfArrays,
+    def arrays(arrays: Iterable[Array],
                batch_size: int,
                shuffle: bool = False,
                skip_incomplete: bool = False,
-               random_state: Optional[RandomStateType] = None
+               random_state: Optional[np.random.RandomState] = None
                ) -> 'ArraysDataStream':
         """
         Construct an arrays stream, i.e., :class:`ArraysDataStream`.
@@ -600,7 +591,7 @@ class DataStream(object):
                 batch_size: int = NOT_SET,
                 shuffle: bool = False,
                 skip_incomplete: bool = False,
-                random_state: Optional[RandomStateType] = None
+                random_state: Optional[np.random.RandomState] = None
                 ) -> 'IntSeqDataStream':
         """
         Construct a integer sequence stream, i.e., :class:`IntSeqStream`.
@@ -672,17 +663,18 @@ class DataStream(object):
 
     @staticmethod
     def gather(streams: Iterable['DataStream'],
-               random_state: Optional[RandomStateType] = None
+               random_state: Optional[np.random.RandomState] = None
                ) -> 'GatherDataStream':
         return GatherDataStream(streams=streams, random_state=random_state)
 
     @staticmethod
-    def generator(f: TGeneratorFactory) -> 'GeneratorFactoryDataStream':
+    def generator(f: Callable[[], ArraysOrArrayGenerator]
+                  ) -> 'GeneratorFactoryDataStream':
         return GeneratorFactoryDataStream(f)
 
     # -------- here starts the transforming methods --------
     def map(self,
-            mapper: TMapper,
+            mapper: Callable[..., ArraysOrArray],
             preserve_shapes: bool = False
             ) -> 'MapperDataStream':
         """
@@ -883,11 +875,11 @@ class ArraysDataStream(DataStream):
     """NumPy arrays data stream."""
 
     def __init__(self,
-                 arrays: IterableOfArrays,
+                 arrays: Iterable[Array],
                  batch_size: int,
                  shuffle: bool,
                  skip_incomplete: bool,
-                 random_state: Optional[RandomStateType] = None):
+                 random_state: Optional[np.random.RandomState] = None):
         # validate parameters
         arrays = tuple(arrays)
         if not arrays:
@@ -918,7 +910,7 @@ class ArraysDataStream(DataStream):
             random_state=random_state,
         )
         self._arrays = map_to_tuple(to_readonly_array, arrays)
-        self._indices_buffer = None  # type: ArrayType
+        self._indices_buffer = None  # type: Array
         self._shuffle = bool(shuffle)
         self._skip_incomplete = bool(skip_incomplete)
 
@@ -937,7 +929,7 @@ class ArraysDataStream(DataStream):
         """Whether or not to exclude the last mini-batch if it is incomplete?"""
         return self._skip_incomplete
 
-    def _minibatch_iterator(self) -> Generator[TupleOfArrays, None, None]:
+    def _minibatch_iterator(self) -> Generator[ArrayTuple, None, None]:
         # shuffle the source arrays if necessary
         if self.shuffle:
             if self._indices_buffer is None:
@@ -984,7 +976,7 @@ class IntSeqDataStream(DataStream):
                  batch_size: int = NOT_SET,
                  shuffle: bool = False,
                  skip_incomplete: bool = False,
-                 random_state: Optional[RandomStateType] = None):
+                 random_state: Optional[np.random.RandomState] = None):
         # validate the arguments
         start = int(start)
 
@@ -1116,12 +1108,12 @@ class UserGeneratorDataStream(DataStream):
 class GeneratorFactoryDataStream(UserGeneratorDataStream):
     """Data stream that turns a generator factory function into a stream."""
 
-    def __init__(self, factory: TGeneratorFactory):
+    def __init__(self, factory: Callable[[], ArraysOrArrayGenerator]):
         super().__init__()
         self._factory = factory
 
     @property
-    def factory(self) -> Callable[[], Generator[IterableOfArrays, None, None]]:
+    def factory(self) -> Callable[[], Generator[Sequence[Array], None, None]]:
         """
         Get the generator factory function (i.e., function that returns a
         mini-batch arrays generator).
@@ -1146,7 +1138,7 @@ class GatherDataStream(DataStream):
 
     def __init__(self,
                  streams: Iterable[DataStream],
-                 random_state: Optional[RandomStateType] = NOT_SET):
+                 random_state: Optional[np.random.RandomState] = NOT_SET):
         # validate the streams
         streams = tuple(streams)
         if not streams:
@@ -1253,12 +1245,12 @@ class MapperDataStream(UserGeneratorDataStream):
 
     def __init__(self,
                  source: DataStream,
-                 mapper: TMapper,
+                 mapper: Callable[..., ArraysOrArray],
                  batch_size: Optional[int] = NOT_SET,
                  array_count: Optional[int] = NOT_SET,
-                 data_shapes: Optional[TupleOfShapes] = NOT_SET,
+                 data_shapes: Optional[Tuple[ArrayShape, ...]] = NOT_SET,
                  data_length: Optional[int] = NOT_SET,
-                 random_state: Optional[RandomStateType] = NOT_SET,
+                 random_state: Optional[np.random.RandomState] = NOT_SET,
                  preserve_shapes: bool = False):
         # validate the arguments
         if not isinstance(source, DataStream):

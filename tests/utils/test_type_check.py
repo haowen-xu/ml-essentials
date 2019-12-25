@@ -13,6 +13,7 @@ from typing import *
 import pytest
 
 from mltk import Config
+from mltk.typing_ import *
 from mltk.utils import *
 from mltk.type_check import *
 from mltk.type_check import (PrimitiveTypeInfo, MultiBaseTypeInfo,
