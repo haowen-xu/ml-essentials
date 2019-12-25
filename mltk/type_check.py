@@ -3,6 +3,7 @@ import dataclasses
 import inspect
 import os
 import re
+import warnings
 from contextlib import contextmanager
 from dataclasses import dataclass, is_dataclass
 from enum import Enum
@@ -105,12 +106,14 @@ class TypeCheckError(ValueError):
 class TypeCheckContext(object):
     """Maintain the context for type check."""
 
-    __slots__ = ('strict', 'inplace', 'ignore_missing', '_errors', '_scopes')
+    __slots__ = ('strict', 'inplace', 'ignore_missing', 'discard_undefined',
+                 '_errors', '_scopes')
 
     def __init__(self,
                  strict: bool = False,
                  inplace: bool = False,
-                 ignore_missing: bool = False):
+                 ignore_missing: bool = False,
+                 discard_undefined: Union[bool, str] = False):
         """
         Construct a new :class:`TypeCheckContext`.
 
@@ -122,10 +125,20 @@ class TypeCheckContext(object):
             ignore_missing: Whether or not to ignore missing attribute?
                 (i.e., config field with neither a default value nor a user
                 specified value)
+            discard_undefined: One of {True, False, 'warn'}.
+                If :obj:`True` or "warn", will discard undefined fields in
+                `check_value()` of :class:`ObjectTypeInfo`.  Also, a
+                :class:`UserWarning` will be generated if this argument is
+                set to "warn".
+                If :obj:`False`, will not discard undefined fields.
         """
+        if discard_undefined not in (True, False, 'warn'):
+            raise ValueError(f"`discard_undefined` must be one of {{True, "
+                             f"False, 'warn'}}: got {discard_undefined!r}")
         self.strict = strict
         self.inplace = inplace
         self.ignore_missing = ignore_missing
+        self.discard_undefined = discard_undefined
         self._scopes: List[str] = []
 
     @contextmanager
@@ -328,7 +341,9 @@ def type_info_from_value(value: Any) -> 'TypeInfo':
 def validate_object(obj: TObject,
                     strict: bool = False,
                     inplace: bool = False,
-                    ignore_missing: bool = False) -> TObject:
+                    ignore_missing: bool = False,
+                    discard_undefined: Union[bool, str] = False
+                    ) -> TObject:
     """
     Check the value of a given object.
 
@@ -339,13 +354,21 @@ def validate_object(obj: TObject,
             the input `value` into desired type.
         inplace: Whether or not to convert the input `value` in place?
         ignore_missing: Whether or not to ignore missing fields?
+        discard_undefined: One of {True, False, 'warn'}.
+            If :obj:`True` or "warn", will discard undefined fields in
+            `check_value()` of :class:`ObjectTypeInfo`.  Also, a
+            :class:`UserWarning` will be generated if this argument is
+            set to "warn".
+            If :obj:`False`, will not discard undefined fields.
 
     Returns:
         The checked object.
     """
-    ctx = TypeCheckContext(strict=strict,
-                           inplace=inplace,
-                           ignore_missing=ignore_missing)
+    ctx = TypeCheckContext(
+        strict=strict,
+        inplace=inplace,
+        ignore_missing=ignore_missing,
+        discard_undefined=discard_undefined)
     return type_info_from_value(obj).check_value(obj, ctx)
 
 
@@ -1210,6 +1233,9 @@ class _ObjectDictProxy(object):
     def __setitem__(self, item, value):
         setattr(self.value, item, value)
 
+    def __delitem__(self, item):
+        delattr(self.value, item)
+
     def __contains__(self, item):
         return hasattr(self.value, item)
 
@@ -1337,6 +1363,20 @@ class ObjectTypeInfo(TypeInfo[TObject]):
                     kv = {k: o[k] for k in o}
                 else:
                     kv = copy.copy(o.__dict__)
+
+        # if `discard undefined` is True, delete undefined fields
+        if context.discard_undefined:
+            keys = list(kv)
+            for key in keys:
+                if key not in self.fields:
+                    if context.discard_undefined == 'warn':
+                        path = context.get_path()
+                        prefix = f'at {path}: ' if path else ''
+                        warnings.warn(
+                            f'{prefix}undefined field {key!r} is discarded',
+                            UserWarning
+                        )
+                    del kv[key]
 
         # run the root pre-checkers
         for checker in self.root_checkers:

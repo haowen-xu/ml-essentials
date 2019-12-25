@@ -116,7 +116,8 @@ class ExperimentTestCase(unittest.TestCase):
             # test new output dir
             self.assertIsNone(get_active_experiment())
             with Experiment(_YourConfig, output_dir=output_dir,
-                            args=('--max_epoch=200', '--train.batch_size=128')
+                            args=('--max_epoch=200', '--train.batch_size=128'),
+                            discard_undefind_config_fields=False
                             ) as exp:
                 time.sleep(0.01)  # to wait for :class:`RemoteDoc` to save config
                 self.assertIs(get_active_experiment(), exp)
@@ -290,7 +291,8 @@ class ExperimentTestCase(unittest.TestCase):
 
             # test restore from the previous output dir
             # (and also parse `output_dir` from CLI arguments)
-            exp = Experiment(_YourConfig, args=['--output-dir=' + output_dir])
+            exp = Experiment(_YourConfig, args=['--output-dir=' + output_dir],
+                             discard_undefind_config_fields=False)
             self.assertNotEqual(exp.output_dir, output_dir)
             with exp:
                 self.assertEqual(exp.output_dir, output_dir)
@@ -308,7 +310,8 @@ class ExperimentTestCase(unittest.TestCase):
                 exp = Experiment(_YourConfig,
                                  args=['--output-dir=' + output_dir,
                                        '--config-file=' + yaml_path,
-                                       '--max_epoch=444'])
+                                       '--max_epoch=444'],
+                                 discard_undefind_config_fields=False)
                 with exp:
                     self.assertEqual(exp.config, _YourConfig(
                         max_epoch=444, max_step=999,

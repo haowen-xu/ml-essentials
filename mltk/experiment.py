@@ -94,7 +94,8 @@ class Experiment(Generic[TConfig]):
                  output_dir: Optional[str] = None,
                  load_config_file: bool = True,
                  save_config_file: bool = True,
-                 args: Optional[Iterable[str]] = NOT_SET):
+                 args: Optional[Iterable[str]] = NOT_SET,
+                 discard_undefind_config_fields: Union[bool, str] = 'warn'):
         """
         Construct a new :class:`Experiment`.
 
@@ -111,6 +112,11 @@ class Experiment(Generic[TConfig]):
                 values into `output_dir + "/config.json"`?
             args: The CLI arguments.  If not specified, use ``sys.argv[1:]``.
                 Specifying :obj:`None` will disable parsing the arguments.
+            discard_undefind_config_fields: One of {True, False, 'warn'},
+                indicating whether to discard undefined fields from previously
+                saved config file.  If True or 'warn', will discard undefined
+                fields.  In addition, a warning will be generated if the
+                argument value is 'warn'.  Defaults to 'warn'.
         """
         # validate the arguments
         config_or_cls_okay = True
@@ -153,6 +159,7 @@ class Experiment(Generic[TConfig]):
         self._load_config_file = load_config_file
         self._save_config_file = save_config_file
         self._args = args
+        self._load_config_discard_undefined = discard_undefind_config_fields
 
         # the event
         self._events = EventHost()
@@ -559,7 +566,8 @@ class Experiment(Generic[TConfig]):
         # load the cli arguments
         config_loader.load_object(parsed_args)
 
-        self._config = config_loader.get()
+        self._config = config_loader.get(
+            discard_undefined=self._load_config_discard_undefined)
 
         # prepare for the output dir
         os.makedirs(self.output_dir, exist_ok=True)

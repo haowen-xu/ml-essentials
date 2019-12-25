@@ -2,6 +2,8 @@ import copy
 import os
 import re
 import unittest
+import warnings
+
 from dataclasses import dataclass, field
 from enum import Enum
 from functools import partial
@@ -113,6 +115,15 @@ class TypeCheckErrorTestCase(unittest.TestCase):
             "    def\n"
             "  * KeyError: 'ghi'"
         )
+
+
+class TypeCheckContextTestCase(unittest.TestCase):
+
+    def test_construct(self):
+        with pytest.raises(ValueError,
+                           match=r"`discard_undefined` must be one of \{True, "
+                                 r"False, 'warn'\}: got 'xyz'"):
+            _ = TypeCheckContext(discard_undefined='xyz')
 
 
 class TypeInfoTestCase(unittest.TestCase):
@@ -1378,3 +1389,80 @@ class TypeInfoTestCase(unittest.TestCase):
                            match='at a: field \'a\' is required, but its '
                                  'value is not specified'):
             _ = ti.check_value({'a': 12})
+
+        #########################
+        # test undefined fields #
+        #########################
+        def root_pre_checker(values):
+            logs.append(dict(values))
+
+        logs = []
+        ti = ObjectTypeInfo(
+            Sink,
+            fields={
+                'a': ObjectFieldInfo('a', type_info=type_info(int))
+            },
+            root_checkers=[
+                ObjectRootChecker(root_pre_checker, pre=True),
+            ]
+        )
+        parent_ti = ObjectTypeInfo(
+            Sink, fields={'value': ObjectFieldInfo('value', ti)}
+        )
+
+        # discard_undefined = False
+        self.assertEqual(
+            ti.check_value({'a': 123, 'b': 456}, TypeCheckContext()),
+            Sink(a=123, b=456)
+        )
+        self.assertEqual(logs, [{'a': 123, 'b': 456}])
+        logs.clear()
+
+        # discard_undefined = True
+        self.assertEqual(
+            ti.check_value(
+                {'a': 123, 'b': 456},
+                TypeCheckContext(discard_undefined=True)),
+            Sink(a=123)
+        )
+        self.assertEqual(logs, [{'a': 123}])
+        logs.clear()
+
+        # discard_undefined = 'warn'
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter('always')
+            self.assertEqual(
+                ti.check_value(
+                    {'a': 123, 'b': 456},
+                    TypeCheckContext(discard_undefined='warn')),
+                Sink(a=123)
+            )
+            self.assertEqual(logs, [{'a': 123}])
+            logs.clear()
+        self.assertEqual(len(w), 1)
+        self.assertTrue(issubclass(w[-1].category, UserWarning))
+        self.assertRegex(
+            str(w[-1].message),
+            "undefined field 'b' is discarded"
+        )
+
+        # discard_undefined = 'warn', nested
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter('always')
+            self.assertEqual(
+                parent_ti.check_value(
+                    {'value': {'a': 123, 'b': 456}, 'c': 789},
+                    TypeCheckContext(discard_undefined='warn')),
+                Sink(value=Sink(a=123))
+            )
+        self.assertEqual(len(w), 2)
+        self.assertTrue(issubclass(w[-2].category, UserWarning))
+        self.assertRegex(
+            str(w[-2].message),
+            "undefined field 'c' is discarded"
+        )
+        self.assertTrue(issubclass(w[-1].category, UserWarning))
+        self.assertRegex(
+            str(w[-1].message),
+            "at value: undefined field 'b' is discarded"
+        )
