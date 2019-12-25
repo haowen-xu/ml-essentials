@@ -1,3 +1,6 @@
+import time
+from contextlib import contextmanager
+
 from dataclasses import dataclass
 from itertools import chain
 from typing import *
@@ -169,26 +172,49 @@ class BaseLoop(metaclass=DocInherit):
         """
         Add metrics to the loop.
 
-        Note this method will not affect the metrics and outputs aggregated
-        by :class:`BatchOutputAggregator` in :meth:`run_batches()`.
-
         Args:
             metrics_, \\**kwargs: The metrics to be collected.
+                The names of the metrics will be ensured to have proper
+                prefix, according to the loop type.
+                See :meth:`mltk.StageType.add_metric_prefix` for more details.
         """
         def collect(target: Dict[str, Any]):
             if metrics_:
                 for key, val in metrics_.items():
+                    key = stage_type.add_metric_prefix(key)
                     target[key] = to_number_or_numpy(val)
             if kwargs:
                 for key, val in kwargs.items():
+                    key = stage_type.add_metric_prefix(key)
                     target[key] = to_number_or_numpy(val)
 
+        stage_type = self._stage.type
         if self._stage.batch.is_active:
             collect(self._batch_metrics)
         elif self._stage.epoch is not None and self._stage.epoch.is_active:
             collect(self._epoch_metrics)
         else:
             collect(self._stage_metrics)
+
+    @contextmanager
+    def timeit(self, metric_name: str):
+        """
+        Open a context, measure the elapsed time between entering and
+        exiting the context, and add the time metric to this loop.
+
+        Args:
+            metric_name: The name of the time metric.
+        """
+        suffix = metric_name.rsplit('_', 1)[-1]
+        if suffix not in ('time', 'timer'):
+            raise ValueError(f'The metric name for a timer should end with '
+                             f'suffix "_time" or "_timer": got metric name '
+                             f'{metric_name!r}')
+        start_time = time.time()
+        try:
+            yield
+        finally:
+            self.add_metrics({metric_name: time.time() - start_time})
 
     def _iter_batches(self,
                       data_generator: Optional[Iterable[BatchArrays]] = None,
@@ -286,7 +312,6 @@ class BaseLoop(metaclass=DocInherit):
             (int, Tuple[np.ndarray, ...]): The batch index and mini-batch
                 arrays, if `data_generator` is specified.
             int: The batch index, if `data_generator` is not specified.
-
         """
         # check the context
         if not self._stage.is_active:
@@ -374,7 +399,6 @@ class BaseLoop(metaclass=DocInherit):
             outputs=outputs,
             aggregators=aggregators,
             excludes=excludes,
-            stage_type=self._stage.type,
         )
 
         # the function to add metric prefix
@@ -392,7 +416,7 @@ class BaseLoop(metaclass=DocInherit):
                                         f'a dict, but got {fn_out!r}')
 
                     fn_out = {
-                        add_metric_prefix(k): to_number_or_numpy(v)
+                        k: to_number_or_numpy(v)
                         for k, v in fn_out.items()
                     }
                     metrics = {}

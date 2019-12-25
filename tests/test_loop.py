@@ -31,7 +31,7 @@ class BaseLoopTestCase(unittest.TestCase):
 
         # default args with remote doc from experiment context, or explicitly None
         with TemporaryDirectory() as temp_dir:
-            with Experiment(Config(), output_dir=temp_dir) as exp:
+            with Experiment(Config(), output_dir=temp_dir, args=[]) as exp:
                 loop = BaseLoop(Stage(StageType.TEST))
                 self.assertIs(loop._remote_doc, exp.doc)
                 self.assertIs(loop.logger.remote_doc, exp.doc)
@@ -69,10 +69,10 @@ class BaseLoopTestCase(unittest.TestCase):
         self.assertIs(loop.logger, expected_callbacks[-1])
 
     def test_add_metrics(self):
+        # test add to stage metrics
         stage = Stage(StageType.TRAIN)
         loop = BaseLoop(stage=stage)
 
-        # test add to stage metrics
         loop.add_metrics({'acc': 0.75, 'loss': 0.125}, loss=0.5)
         self.assertEqual(loop._stage_metrics, {'acc': 0.75, 'loss': 0.5})
         self.assertEqual(loop._epoch_metrics, {})
@@ -91,6 +91,39 @@ class BaseLoopTestCase(unittest.TestCase):
         self.assertEqual(loop._stage_metrics, {'acc': 0.75, 'loss': 0.5})
         self.assertEqual(loop._epoch_metrics, {'acc': 1.75, 'loss': 1.5})
         self.assertEqual(loop._batch_metrics, {'acc': 2.75, 'loss': 2.5})
+
+        # test the metric prefix
+        stage = Stage(StageType.TEST)
+        loop = BaseLoop(stage=stage)
+        loop.add_metrics({'acc': 0.75, 'loss': 0.125}, loss=0.5)
+        self.assertEqual(loop._stage_metrics,
+                         {'test_acc': 0.75, 'test_loss': 0.5})
+
+    def test_timeit(self):
+        stage = Stage(StageType.TRAIN)
+        loop = BaseLoop(stage=stage)
+        loop.add_metrics = Mock(wraps=loop.add_metrics)
+
+        with pytest.raises(ValueError,
+                           match='The metric name for a timer should end '
+                                 'with suffix "_time" or "_timer": got '
+                                 'metric name \'xyz\''):
+            with loop.timeit('xyz'):
+                pass
+
+        def fake_timer(v=[1.]):
+            v[0] *= 2
+            return v[0]
+
+        with mock.patch('time.time', fake_timer):
+            with loop.timeit('the_time'):
+                pass
+            with loop.timeit('another_timer'):
+                pass
+
+        self.assertEqual(
+            loop._stage_metrics,
+            {'the_time': 2.0, 'another_timer': 8.0})
 
     def test_iter_batches(self):
         # test error calls
@@ -302,10 +335,10 @@ class BaseLoopTestCase(unittest.TestCase):
 
             # check the outputs
             expected_out = {
-                'test_avg(x,y)': 7.5,
-                'test_i': 1.875,
-                'test_sum(x,y)': 39.75,
-                'test_x+y': 15.0,
+                'avg(x,y)': 7.5,
+                'i': 1.875,
+                'sum(x,y)': 39.75,
+                'x+y': 15.0,
             }
             self.assertEqual(set(out), set(expected_out))
             for key in expected_out:
@@ -315,9 +348,9 @@ class BaseLoopTestCase(unittest.TestCase):
             self.assertEqual(
                 loop.add_metrics.call_args_list,
                 [
-                    (({'test_i': 1.0, 'test_avg(x,y)': 5.0, 'test_sum(x,y)': 30.0, 'test_x+y': 10.0},), {}),
-                    (({'test_i': 2.0, 'test_avg(x,y)': 8.0, 'test_sum(x,y)': 48.0, 'test_x+y': 16.0},), {}),
-                    (({'test_i': 3.0, 'test_avg(x,y)': 10.5, 'test_sum(x,y)': 42.0, 'test_x+y': 21.0},), {}),
+                    (({'i': 1.0, 'avg(x,y)': 5.0, 'sum(x,y)': 30.0, 'x+y': 10.0},), {}),
+                    (({'i': 2.0, 'avg(x,y)': 8.0, 'sum(x,y)': 48.0, 'x+y': 16.0},), {}),
+                    (({'i': 3.0, 'avg(x,y)': 10.5, 'sum(x,y)': 42.0, 'x+y': 21.0},), {}),
                 ]
             )
 
@@ -339,7 +372,7 @@ class BaseLoopTestCase(unittest.TestCase):
             out = loop.run_batches(
                 batch_fn,
                 g,
-                metrics=('avg(x,y)', 'test_i'),
+                metrics=('avg(x,y)', 'i'),
                 outputs=['x+y'],
                 aggregators={
                     'sum(x,y)': BatchAggregator('SUM')
@@ -348,10 +381,10 @@ class BaseLoopTestCase(unittest.TestCase):
 
             # check the outputs
             expected_out = {
-                'test_avg(x,y)': 7.5,
-                'test_i': 1.875,
-                'test_sum(x,y)': 120,
-                'test_x+y': np.array([8, 10, 12, 14, 16, 18, 20, 22])
+                'avg(x,y)': 7.5,
+                'i': 1.875,
+                'sum(x,y)': 120,
+                'x+y': np.array([8, 10, 12, 14, 16, 18, 20, 22])
             }
             self.assertEqual(set(out), set(expected_out))
             for key in expected_out:
@@ -361,9 +394,9 @@ class BaseLoopTestCase(unittest.TestCase):
             self.assertEqual(
                 loop.add_metrics.call_args_list,
                 [
-                    (({'test_i': 1.0, 'test_avg(x,y)': 5.0},), {}),
-                    (({'test_i': 2.0, 'test_avg(x,y)': 8.0},), {}),
-                    (({'test_i': 3.0, 'test_avg(x,y)': 10.5},), {}),
+                    (({'i': 1.0, 'avg(x,y)': 5.0},), {}),
+                    (({'i': 2.0, 'avg(x,y)': 8.0},), {}),
+                    (({'i': 3.0, 'avg(x,y)': 10.5},), {}),
                 ]
             )
 
@@ -408,7 +441,7 @@ class BaseLoopTestCase(unittest.TestCase):
         x = np.arange(8)
         g = DataStream.arrays([x], batch_size=3)
 
-        stage = Stage(StageType.TEST)
+        stage = Stage(StageType.TRAIN)
         loop = BaseLoop(stage, callbacks=[_MyCallback()])
         loop.on_begin.do(lambda: logs.append('begin'))
         loop.on_end.do(lambda: logs.append('end'))
@@ -802,9 +835,9 @@ class BatchOnlyLoopTestCase(unittest.TestCase):
             self.assertEqual(
                 loop.add_metrics.call_args_list,
                 [
-                    (({'test_avg(x)': 1.0},), {}),
-                    (({'test_avg(x)': 4.0},), {}),
-                    (({'test_avg(x)': 6.5},), {}),
+                    (({'avg(x)': 1.0},), {}),
+                    (({'avg(x)': 4.0},), {}),
+                    (({'avg(x)': 6.5},), {}),
                 ]
             )
 
@@ -813,14 +846,14 @@ class BatchOnlyLoopTestCase(unittest.TestCase):
         loop.run_batches = Mock(wraps=loop.run_batches)
         loop.add_metrics = Mock(wraps=loop.add_metrics)
         with loop:
-            self.assertEqual(loop.run(batch_fn, g), {'test_avg(x)': 3.5})
+            self.assertEqual(loop.run(batch_fn, g), {'avg(x)': 3.5})
         check_call_args(loop)
 
         # no context, only_batch = True
         loop = _BatchOnlyLoop(stage=Stage(StageType.TEST))
         loop.run_batches = Mock(wraps=loop.run_batches)
         loop.add_metrics = Mock(wraps=loop.add_metrics)
-        self.assertEqual(loop.run(batch_fn, g), {'test_avg(x)': 3.5})
+        self.assertEqual(loop.run(batch_fn, g), {'avg(x)': 3.5})
         check_call_args(loop)
 
     def test_validation_loop(self):

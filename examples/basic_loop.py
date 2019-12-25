@@ -95,9 +95,9 @@ if __name__ == '__main__':
     # do final test
     model.eval()
     result = mltk.TestLoop().run(test_step, test_stream)
-    print(f'test_acc: {result["test_acc"]:.6g}')
+    print(f'test acc: {result["acc"]:.6g}')
 
     # run predict loop
     model.eval()
     result = mltk.PredictLoop().run(predict_step, predict_stream)
-    print(f'pred_y: {result["pred_y"].shape}, {result["pred_y"]}')
+    print(f'predicted y: {result["y"].shape}, {result["y"]}')
