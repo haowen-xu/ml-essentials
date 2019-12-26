@@ -255,23 +255,35 @@ def format_duration(duration: Union[float, int, timedelta],
     return ret
 
 
-def format_as_asctime(dt: datetime) -> str:
+def format_as_asctime(dt: datetime,
+                      datetime_format: str = '%Y-%m-%d %H:%M:%S',
+                      msec_format: str = '%03d',
+                      datetime_msec_sep: str = ',') -> str:
     """
     Format datetime `dt` using the `asctime` format of the logging module.
 
     >>> format_as_asctime(datetime.utcfromtimestamp(1576755571.662434))
     '2019-12-19 11:39:31,662'
+    >>> format_as_asctime(datetime.utcfromtimestamp(1576755571.662434),
+    ...                   datetime_format='%Y-%m-%d_%H-%M-%S',
+    ...                   datetime_msec_sep='_')
+    '2019-12-19_11-39-31_662'
 
     Args:
         dt: The datetime object.
+        datetime_format: The format str for the datetime part (i.e.,
+            year, month, day, hour, minute, second).
+        msec_format: The format str for the milliseconds part.
+        datetime_msec_sep: The separator between the datetime str and the
+            milliseconds str.
 
     Returns:
-        The formatted datetime.
+        The formatted datetime and milliseconds.
     """
     msec = int(round(dt.microsecond / 1000))
-    datetime_str = dt.strftime('%Y-%m-%d %H:%M:%S')
-    msec_str = f'{msec:03d}'
-    return f'{datetime_str},{msec_str}'
+    datetime_str = dt.strftime(datetime_format)
+    msec_str = msec_format % msec
+    return f'{datetime_str}{datetime_msec_sep}{msec_str}'
 
 
 class MetricsFormatter(object):

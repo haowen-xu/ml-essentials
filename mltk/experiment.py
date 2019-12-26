@@ -93,6 +93,7 @@ class Experiment(Generic[TConfig]):
                  config_or_cls: Union[Type[TConfig], TConfig],
                  script_name: Optional[str] = None,
                  output_dir: Optional[str] = None,
+                 create_output_dir: bool = True,
                  load_config_file: bool = True,
                  save_config_file: bool = True,
                  args: Optional[Iterable[str]] = NOT_SET,
@@ -107,6 +108,9 @@ class Experiment(Generic[TConfig]):
             output_dir: The output directory.  If not specified, use
                 `"./results/" + script_name`, or assigned by MLStorage
                 server if the experiment is launched by `mlrun`.
+            create_output_dir: Whether or not to automatically create
+                `output_dir`, when entering the experiment context,
+                if it does not exist?  Defaults to :obj:`True`.
             load_config_file: Whether or not to restore configuration
                 values from `output_dir + "/config.json"`?
             save_config_file: Whether or not to save configuration
@@ -148,7 +152,11 @@ class Experiment(Generic[TConfig]):
             candidate_dir = f'./results/{script_name}'
             while os.path.exists(candidate_dir):
                 time.sleep(0.01)
-                suffix = format_as_asctime(datetime.now()).replace(',', '.')
+                suffix = format_as_asctime(
+                    datetime.now(),
+                    datetime_format='%Y-%m-%d_%H-%M-%S',
+                    datetime_msec_sep='_',
+                )
                 candidate_dir = f'./results/{script_name}_{suffix}'
             output_dir = candidate_dir
         output_dir = os.path.abspath(output_dir)
@@ -161,6 +169,7 @@ class Experiment(Generic[TConfig]):
         # memorize the arguments
         self._script_name = script_name
         self._output_dir = output_dir
+        self._create_output_dir = create_output_dir
         self._config = config
         self._load_config_file = load_config_file
         self._save_config_file = save_config_file
@@ -298,7 +307,12 @@ class Experiment(Generic[TConfig]):
             with codecs.open(path, 'wb', 'utf-8') as f:
                 f.write(obj_json)
 
-        os.makedirs(self.output_dir, exist_ok=True)
+        # NOTE: Do not makedirs until we've confirmed that some fields need
+        #       to be saved.
+        if any(key in updated_fields
+               for key in ('config', 'default_config', 'result')):
+            os.makedirs(self.output_dir, exist_ok=True)
+
         if 'config' in updated_fields:
             save_json_file(os.path.join(self.output_dir, 'config.json'),
                            updated_fields['config'])
@@ -588,7 +602,8 @@ class Experiment(Generic[TConfig]):
             discard_undefined=self._load_config_discard_undefined)
 
         # prepare for the output dir
-        os.makedirs(self.output_dir, exist_ok=True)
+        if self._create_output_dir:
+            os.makedirs(self.output_dir, exist_ok=True)
 
         # start the remote doc background worker
         self._remote_doc.start_worker()

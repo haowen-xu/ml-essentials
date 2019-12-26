@@ -69,7 +69,11 @@ class ExperimentTestCase(unittest.TestCase):
                         return dt
 
                 dt = datetime.utcfromtimestamp(1576755571.662434)
-                dt_str = format_as_asctime(dt).replace(',', '.')
+                dt_str = format_as_asctime(
+                    dt,
+                    datetime_format='%Y-%m-%d_%H-%M-%S',
+                    datetime_msec_sep='_',
+                )
                 output_dir = os.path.abspath(f'./results/abc_{dt_str}')
                 with mock.patch('mltk.experiment.datetime', FakeDateTime()):
                     exp = Experiment(_YourConfig, script_name='abc', args=[])
@@ -139,6 +143,16 @@ class ExperimentTestCase(unittest.TestCase):
         with TemporaryDirectory() as temp_dir:
             output_dir = os.path.join(temp_dir, 'output')
             result_json_path = os.path.join(output_dir, 'result.json')
+
+            # test no create output dir
+            with Experiment(_YourConfig,
+                            output_dir=output_dir,
+                            create_output_dir=False,
+                            args=[],
+                            load_config_file=False,
+                            save_config_file=False):
+                pass
+            self.assertFalse(os.path.exists(output_dir))
 
             # test new output dir
             self.assertIsNone(get_active_experiment())

@@ -9,6 +9,7 @@ from .errors import *
 from .events import *
 from .experiment import *
 from .formatting import *
+from .logging_ import *
 from .loop import *
 from .metrics import *
 from .mlrunner import *
