@@ -2,6 +2,7 @@ import re
 from typing import *
 
 import numpy as np
+from bson import ObjectId
 
 __all__ = [
     'TConfig', 'TObject', 'TValue',
@@ -11,8 +12,6 @@ __all__ = [
     'ArraysOrArrayGenerator', 'XYArrayTuple', 'ArrayDType',
     'ArrayShape', 'BatchGenerator',
 ]
-
-from bson import ObjectId
 
 TConfig = TypeVar('TConfig')
 """Generic type of config classes."""

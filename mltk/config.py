@@ -691,6 +691,7 @@ class ConfigLoader(Generic[TConfig]):
         return self._config_cls
 
     def get(self,
+            inplace: bool = True,
             ignore_missing: bool = False,
             discard_undefined: Union[bool, str] = False
             ) -> TConfig:
@@ -698,6 +699,7 @@ class ConfigLoader(Generic[TConfig]):
         Get the validated config object.
 
         Args:
+            inplace: Whether or not to validate the config object inplace?
             ignore_missing: Whether or not to ignore missing attribute?
                 (i.e., attribute defined by :class:`ConfigField` without
                 a default value and user specified value)
@@ -711,8 +713,10 @@ class ConfigLoader(Generic[TConfig]):
         return self._config_type_info.check_value(
             self._config,
             TypeCheckContext(
+                inplace=inplace,
                 ignore_missing=ignore_missing,
-                discard_undefined=discard_undefined)
+                discard_undefined=discard_undefined
+            )
         )
 
     def load_object(self, key_values: Union[Mapping, Config]):

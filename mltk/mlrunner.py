@@ -303,7 +303,7 @@ class MLRunner(object):
             webui_patterns = self.config.integration.webui_patterns
             log_receiver = ProgramOutputReceiver(
                 parsers=[
-                    MLTKTrainInfoOutputParser(),
+                    TFSnippetTrainOutputParser(),
                     GeneralWebUIOutputParser(patterns=webui_patterns),
                 ]
             )

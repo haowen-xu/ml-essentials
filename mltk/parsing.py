@@ -15,7 +15,7 @@ __all__ = [
     'ProgramWebUIInfo',
 
     # program output parsers
-    'ProgramOutputParser', 'MLTKTrainInfoOutputParser',
+    'ProgramOutputParser', 'TFSnippetTrainOutputParser',
     'GeneralWebUIOutputParser',
 
     # program output receiver
@@ -127,11 +127,11 @@ def re_compile_bytes(pattern: Union[bytes, str, PatternType]) -> PatternType:
     return pattern
 
 
-class MLTKTrainInfoOutputParser(ProgramOutputParser[ProgramTrainInfo]):
+class TFSnippetTrainOutputParser(ProgramOutputParser[ProgramTrainInfo]):
     """
-    Training progress information parser for ML Essentials generated logs.
+    Training progress information parser for TFSnippet generated logs.
 
-    >>> parser = MLTKTrainInfoOutputParser()
+    >>> parser = TFSnippetTrainOutputParser()
 
     >>> items = list(parser.parse_line(b'[Epoch 21/100, Batch 32/99, Step 555/999, ETA 1d 3m]'
     ...                                b'loss: 0.875; acc: 0.91 (\\xc2\\xb10.01)'))

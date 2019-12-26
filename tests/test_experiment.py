@@ -5,8 +5,10 @@ import shutil
 import sys
 import time
 import unittest
+from datetime import datetime
 from tempfile import TemporaryDirectory
 
+import mock
 import pytest
 from bson import ObjectId
 
@@ -47,9 +49,34 @@ class ExperimentTestCase(unittest.TestCase):
                 self.assertEqual(exp.output_dir, temp_dir)
 
         # test specifying script_name
-        exp = Experiment(_YourConfig, script_name='abc')
-        self.assertEqual(exp.script_name, 'abc')
-        self.assertEqual(exp.output_dir, os.path.abspath(f'./results/abc'))
+        old_cwd = os.getcwd()
+        try:
+            with TemporaryDirectory() as temp_dir:
+                os.chdir(temp_dir)
+                output_dir = os.path.abspath('./results/abc')
+                self.assertFalse(os.path.exists(output_dir))
+
+                # first time to use the script name
+                exp = Experiment(_YourConfig, script_name='abc', args=[])
+                self.assertEqual(exp.script_name, 'abc')
+                self.assertEqual(exp.output_dir, output_dir)
+                with exp:
+                    self.assertTrue(os.path.exists(output_dir))
+
+                # second time to use the script name, deduplicate it with date
+                class FakeDateTime(object):
+                    def now(self):
+                        return dt
+
+                dt = datetime.utcfromtimestamp(1576755571.662434)
+                dt_str = format_as_asctime(dt).replace(',', '.')
+                output_dir = os.path.abspath(f'./results/abc_{dt_str}')
+                with mock.patch('mltk.experiment.datetime', FakeDateTime()):
+                    exp = Experiment(_YourConfig, script_name='abc', args=[])
+                self.assertEqual(exp.output_dir, output_dir)
+
+        finally:
+            os.chdir(old_cwd)
 
         # test specifying the output dir
         with TemporaryDirectory() as temp_dir:
@@ -148,7 +175,9 @@ class ExperimentTestCase(unittest.TestCase):
 
                 # `update_results`, and they should be saved later in
                 # "/result.json"
+                self.assertIsNone(exp.results)
                 exp.update_results({'loss': 1, 'acc': 2})  # this should be merged with the above file content
+                self.assertEqual(exp.results, {'loss': 1, 'acc': 2})
 
                 # further modify `config`, and it should be saved after
                 # exiting the context
@@ -288,6 +317,16 @@ class ExperimentTestCase(unittest.TestCase):
                     'g.txt': b'g.txt',
                 },
             })
+
+            # test no load config file and no save config file
+            # (and also parse `output_dir` from CLI arguments)
+            exp = Experiment(_YourConfig,
+                             args=['--max_epoch=123'],
+                             output_dir=output_dir,
+                             load_config_file=False,
+                             save_config_file=False)
+            with exp:
+                self.assertEqual(exp.config, _YourConfig(max_epoch=123))
 
             # test restore from the previous output dir
             # (and also parse `output_dir` from CLI arguments)

@@ -2,8 +2,10 @@ import codecs
 import os
 import shutil
 import sys
+import time
 import zipfile
 from argparse import ArgumentParser
+from datetime import datetime
 from tempfile import TemporaryDirectory
 from typing import *
 
@@ -11,6 +13,7 @@ from bson import ObjectId
 
 from .config import Config, ConfigLoader, config_to_dict, config_defaults
 from .events import EventHost, Event
+from .formatting import format_as_asctime
 from .mlstorage import MLStorageClient, ExperimentDoc
 from .utils import (NOT_SET, make_dir_archive, json_dumps, json_loads,
                     ContextStack)
@@ -142,7 +145,12 @@ class Experiment(Generic[TConfig]):
         if output_dir is None:
             output_dir = os.environ.get('MLSTORAGE_OUTPUT_DIR', None)
         if output_dir is None:
-            output_dir = f'./results/{script_name}'
+            candidate_dir = f'./results/{script_name}'
+            while os.path.exists(candidate_dir):
+                time.sleep(0.01)
+                suffix = format_as_asctime(datetime.now()).replace(',', '.')
+                candidate_dir = f'./results/{script_name}_{suffix}'
+            output_dir = candidate_dir
         output_dir = os.path.abspath(output_dir)
 
         if args is NOT_SET:
@@ -204,6 +212,13 @@ class Experiment(Generic[TConfig]):
         :meth:`save_config()`, in order to save the modifications to disk.
         """
         return self._config
+
+    @property
+    def results(self) -> Optional[Mapping[str, Any]]:
+        """
+        Get the results, or :obj:`None` if no result has been written.
+        """
+        return self.doc.get('result', None)
 
     @property
     def script_name(self) -> str:
@@ -552,20 +567,23 @@ class Experiment(Generic[TConfig]):
             parsed_args = {}
 
         # load previously saved configuration
-        config_files = [
-            os.path.join(self.output_dir, 'config.yml'),
-            os.path.join(self.output_dir, 'config.json'),
-        ]
-        for config_file in config_files:
-            try:
-                if os.path.exists(config_file):
-                    config_loader.load_file(config_file)
-            except Exception:  # pragma: no cover
-                raise IOError(f'Failed to load config file: {config_file!r}')
+        if self._load_config_file:
+            config_files = [
+                os.path.join(self.output_dir, 'config.yml'),
+                os.path.join(self.output_dir, 'config.json'),
+            ]
+            for config_file in config_files:
+                try:
+                    if os.path.exists(config_file):
+                        config_loader.load_file(config_file)
+                except Exception:  # pragma: no cover
+                    raise IOError(f'Failed to load config file: '
+                                  f'{config_file!r}')
 
         # load the cli arguments
         config_loader.load_object(parsed_args)
 
+        # finally, generate the config object
         self._config = config_loader.get(
             discard_undefined=self._load_config_discard_undefined)
 
