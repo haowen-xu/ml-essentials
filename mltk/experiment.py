@@ -98,9 +98,9 @@ class Experiment(Generic[TConfig]):
     def __init__(self,
                  config_or_cls: Union[Type[TConfig], TConfig],
                  *,
-                 script_name: Optional[str] = None,
+                 script_name: str = NOT_SET,
                  output_dir: Optional[str] = NOT_SET,
-                 args: Optional[Iterable[str]] = NOT_SET,
+                 args: Sequence[str] = NOT_SET,
                  auto_load_config: bool = NOT_SET,
                  auto_save_config: bool = NOT_SET,
                  discard_undefind_config_fields: Union[str, DiscardMode] = DiscardMode.WARN,
@@ -135,10 +135,6 @@ class Experiment(Generic[TConfig]):
                 config fields when loading from previously saved config file.
                 Defaults to ``DiscardMode.WARN``, where the undefined config
                 fields are automatically discarded, with a warning generated.
-
-            create_output_dir: Whether or not to automatically create
-                `output_dir`, when entering the experiment context,
-                if it does not exist?  Defaults to :obj:`True`.
         """
         # validate the arguments
         config_or_cls_okay = True
@@ -159,7 +155,7 @@ class Experiment(Generic[TConfig]):
             raise TypeError(f'`config_or_cls` is neither a Config class, '
                             f'nor a Config instance: {config_or_cls!r}')
 
-        if script_name is None:
+        if script_name is NOT_SET:
             script_name = os.path.splitext(
                 os.path.basename(sys.modules['__main__'].__file__))[0]
 
@@ -185,8 +181,7 @@ class Experiment(Generic[TConfig]):
 
         if args is NOT_SET:
             args = sys.argv[1:]
-        if args is not None:
-            args = tuple(map(str, args))
+        args = tuple(map(str, args))
 
         # if auto_load_config is NOT_SET:
         #     auto_load_config = output_dir is not None

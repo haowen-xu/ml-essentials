@@ -104,7 +104,7 @@ class ExperimentTestCase(unittest.TestCase):
 
         # test args
         self.assertTupleEqual(Experiment(_YourConfig).args, tuple(sys.argv[1:]))
-        self.assertIsNone(Experiment(_YourConfig, args=None).args)
+        self.assertEqual(Experiment(_YourConfig, args=[]).args, ())
 
         args = ('--output-dir=abc', '--max_epoch=123')
         self.assertTupleEqual(Experiment(_YourConfig, args=args).args, args)
@@ -124,7 +124,7 @@ class ExperimentTestCase(unittest.TestCase):
         with TemporaryDirectory() as temp_dir:
             event_track = []
 
-            exp = Experiment(_YourConfig, output_dir=temp_dir, args=None)
+            exp = Experiment(_YourConfig, output_dir=temp_dir, args=[])
             exp.on_enter.do(lambda: event_track.append('on enter'))
             exp.on_exit.do(lambda: event_track.append('on exit'))
 
