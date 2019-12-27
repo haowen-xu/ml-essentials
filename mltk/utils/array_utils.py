@@ -52,6 +52,8 @@ def to_number_or_numpy(arr) -> Union[np.ndarray, float, int]:
         # TensorFlow and PyTorch tensor has ``.numpy()``.
         if hasattr(arr, 'detach'):  # PyTorch further requires ``.detach()`` before calling ``.numpy()``
             arr = arr.detach()
+        if hasattr(arr, 'cpu'):  # PyTorch further requires ``.cpu()`` before calling ``.numpy()``
+            arr = arr.cpu()
         return arr.numpy()
     else:
         return np.array(arr)

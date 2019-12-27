@@ -109,9 +109,9 @@ class DataStreamTestCase(unittest.TestCase):
             for i, [batch_x, batch_y] in enumerate(s):
                 self.assertIsInstance(batch_x, torch.Tensor)
                 self.assertIsInstance(batch_y, torch.Tensor)
-                np.testing.assert_equal(batch_x.detach().numpy(),
+                np.testing.assert_equal(batch_x.detach().cpu().numpy(),
                                         x[i * 3: (i + 1) * 3])
-                np.testing.assert_equal(batch_y.detach().numpy(),
+                np.testing.assert_equal(batch_y.detach().cpu().numpy(),
                                         y[i * 3: (i + 1) * 3])
 
 
