@@ -101,8 +101,8 @@ class Experiment(Generic[TConfig]):
                  script_name: str = NOT_SET,
                  output_dir: Optional[str] = NOT_SET,
                  args: Sequence[str] = NOT_SET,
-                 auto_load_config: bool = NOT_SET,
-                 auto_save_config: bool = NOT_SET,
+                 auto_load_config: bool = True,
+                 auto_save_config: bool = True,
                  discard_undefind_config_fields: Union[str, DiscardMode] = DiscardMode.WARN,
                  # deprecated arguments
                  create_output_dir: bool = True,
@@ -127,10 +127,10 @@ class Experiment(Generic[TConfig]):
                 Specifying :obj:`None` will disable parsing the arguments.
             auto_load_config: Whether or not to restore configuration
                 values from the previously saved `output_dir + "/config.json"`?
-                Defaults to :obj:`True` if `output_dir` is not None.
+                If `output_dir` is None, this argument will be ignored.
             auto_save_config: Whether or not to save configuration
                 values into `output_dir + "/config.json"`?
-                Defaults to :obj:`True` if `output_dir` is not None.
+                If `output_dir` is None, this argument will be ignored.
             discard_undefind_config_fields: The mode to deal with undefined
                 config fields when loading from previously saved config file.
                 Defaults to ``DiscardMode.WARN``, where the undefined config
@@ -174,19 +174,10 @@ class Experiment(Generic[TConfig]):
             output_dir = candidate_dir
         if output_dir is not None:
             output_dir = os.path.abspath(output_dir)
-            if auto_load_config is NOT_SET:
-                auto_load_config = True
-            if auto_save_config is NOT_SET:
-                auto_save_config = True
 
         if args is NOT_SET:
             args = sys.argv[1:]
         args = tuple(map(str, args))
-
-        # if auto_load_config is NOT_SET:
-        #     auto_load_config = output_dir is not None
-        # if auto_save_config is NOT_SET:
-        #     auto_save_config = output_dir is not None
 
         # memorize the arguments
         self._config = config
@@ -616,10 +607,6 @@ class Experiment(Generic[TConfig]):
             if output_dir is not NOT_SET:
                 # special hack: override `output_dir` if specified
                 self._output_dir = os.path.abspath(output_dir)
-                if self._auto_load_config is NOT_SET:
-                    self._auto_load_config = True
-                if self._auto_save_config is NOT_SET:
-                    self._auto_save_config = True
                 parsed_args.output_dir = NOT_SET
 
             parsed_args = {
@@ -630,7 +617,7 @@ class Experiment(Generic[TConfig]):
             parsed_args = {}
 
         # load previously saved configuration
-        if self._auto_load_config:
+        if self._output_dir is not None and self._auto_load_config:
             config_files = [
                 os.path.join(self.output_dir, 'config.yml'),
                 os.path.join(self.output_dir, 'config.json'),
