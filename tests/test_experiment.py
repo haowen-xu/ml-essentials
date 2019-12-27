@@ -144,13 +144,22 @@ class ExperimentTestCase(unittest.TestCase):
             output_dir = os.path.join(temp_dir, 'output')
             result_json_path = os.path.join(output_dir, 'result.json')
 
-            # test no create output dir
+            # test `output_dir=None`
+            with Experiment(_YourConfig,
+                            output_dir=None,
+                            args=[]) as exp:
+                with pytest.raises(RuntimeError,
+                                   match='No output directory is configured.'):
+                    exp.make_dirs('abc')
+            self.assertFalse(os.path.exists(output_dir))
+
+            # test `create_output_dir=False` (deprecated argument)
             with Experiment(_YourConfig,
                             output_dir=output_dir,
-                            create_output_dir=False,
                             args=[],
-                            load_config_file=False,
-                            save_config_file=False):
+                            auto_load_config=False,
+                            auto_save_config=False,
+                            create_output_dir=False):
                 pass
             self.assertFalse(os.path.exists(output_dir))
 
@@ -158,7 +167,7 @@ class ExperimentTestCase(unittest.TestCase):
             self.assertIsNone(get_active_experiment())
             with Experiment(_YourConfig, output_dir=output_dir,
                             args=('--max_epoch=200', '--train.batch_size=128'),
-                            discard_undefind_config_fields=False
+                            discard_undefind_config_fields='no'
                             ) as exp:
                 time.sleep(0.01)  # to wait for :class:`RemoteDoc` to save config
                 self.assertIs(get_active_experiment(), exp)
@@ -337,16 +346,29 @@ class ExperimentTestCase(unittest.TestCase):
             exp = Experiment(_YourConfig,
                              args=['--max_epoch=123'],
                              output_dir=output_dir,
-                             load_config_file=False,
-                             save_config_file=False)
+                             auto_load_config=False,
+                             auto_save_config=False)
             with exp:
                 self.assertEqual(exp.config, _YourConfig(max_epoch=123))
 
             # test restore from the previous output dir
             # (and also parse `output_dir` from CLI arguments)
             exp = Experiment(_YourConfig, args=['--output-dir=' + output_dir],
-                             discard_undefind_config_fields=False)
+                             discard_undefind_config_fields='no')
             self.assertNotEqual(exp.output_dir, output_dir)
+            with exp:
+                self.assertEqual(exp.output_dir, output_dir)
+                self.assertEqual(exp.config, _YourConfig(
+                    max_epoch=300, max_step=10000, train=_YourConfig.train(
+                        batch_size=128
+                    )
+                ))
+
+            # test override `output_dir=None`
+            exp = Experiment(_YourConfig,
+                             args=['--output-dir=' + output_dir],
+                             output_dir=None,
+                             discard_undefind_config_fields='no')
             with exp:
                 self.assertEqual(exp.output_dir, output_dir)
                 self.assertEqual(exp.config, _YourConfig(
@@ -364,7 +386,7 @@ class ExperimentTestCase(unittest.TestCase):
                                  args=['--output-dir=' + output_dir,
                                        '--config-file=' + yaml_path,
                                        '--max_epoch=444'],
-                                 discard_undefind_config_fields=False)
+                                 discard_undefind_config_fields='no')
                 with exp:
                     self.assertEqual(exp.config, _YourConfig(
                         max_epoch=444, max_step=999,

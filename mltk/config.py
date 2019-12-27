@@ -693,7 +693,7 @@ class ConfigLoader(Generic[TConfig]):
     def get(self,
             inplace: bool = True,
             ignore_missing: bool = False,
-            discard_undefined: Union[bool, str] = False
+            discard_undefined: Union[DiscardMode, str] = DiscardMode.NO
             ) -> TConfig:
         """
         Get the validated config object.
@@ -703,12 +703,9 @@ class ConfigLoader(Generic[TConfig]):
             ignore_missing: Whether or not to ignore missing attribute?
                 (i.e., attribute defined by :class:`ConfigField` without
                 a default value and user specified value)
-            discard_undefined: One of {True, False, 'warn'}.
-                If :obj:`True` or "warn", will discard undefined fields in
-                `check_value()` of :class:`ObjectTypeInfo`.  Also, a
-                :class:`UserWarning` will be generated if this argument is
-                set to "warn".
-                If :obj:`False`, will not discard undefined fields.
+            discard_undefined: The mode to deal with undefined fields.
+                Defaults to ``DiscardMode.NO``, where the undefined fields
+                are not discarded.
         """
         return self._config_type_info.check_value(
             self._config,

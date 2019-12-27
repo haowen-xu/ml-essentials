@@ -16,8 +16,9 @@ from .events import EventHost, Event
 from .formatting import format_as_asctime
 from .mlstorage import MLStorageClient, ExperimentDoc
 from .utils import (NOT_SET, make_dir_archive, json_dumps, json_loads,
-                    ContextStack)
+                    ContextStack, deprecated_arg)
 from .utils.remote_doc import merge_updates_into_doc
+from .type_check import DiscardMode
 from .typing_ import TConfig
 
 __all__ = ['Experiment', 'get_active_experiment']
@@ -89,15 +90,25 @@ class Experiment(Generic[TConfig]):
     once again when resuming from an experiment.
     """
 
+    @deprecated_arg('load_config_file', 'auto_load_config')
+    @deprecated_arg('save_config_file', 'auto_save_config')
+    @deprecated_arg('create_output_dir',
+                    message='manually set `output_dir` to None if you do not '
+                            'need an output directory')
     def __init__(self,
                  config_or_cls: Union[Type[TConfig], TConfig],
+                 *,
                  script_name: Optional[str] = None,
-                 output_dir: Optional[str] = None,
-                 create_output_dir: bool = True,
-                 load_config_file: bool = True,
-                 save_config_file: bool = True,
+                 output_dir: Optional[str] = NOT_SET,
                  args: Optional[Iterable[str]] = NOT_SET,
-                 discard_undefind_config_fields: Union[bool, str] = 'warn'):
+                 auto_load_config: bool = NOT_SET,
+                 auto_save_config: bool = NOT_SET,
+                 discard_undefind_config_fields: Union[str, DiscardMode] = DiscardMode.WARN,
+                 # deprecated arguments
+                 create_output_dir: bool = True,
+                 load_config_file: bool = None,
+                 save_config_file: bool = None,
+                 ):
         """
         Construct a new :class:`Experiment`.
 
@@ -108,20 +119,26 @@ class Experiment(Generic[TConfig]):
             output_dir: The output directory.  If not specified, use
                 `"./results/" + script_name`, or assigned by MLStorage
                 server if the experiment is launched by `mlrun`.
+
+                Set to :obj:`None` will disable using an output directory.
+                In this case, any method that attempt to operate on the
+                output directory will cause an error.
+            args: The CLI arguments.  If not specified, use ``sys.argv[1:]``.
+                Specifying :obj:`None` will disable parsing the arguments.
+            auto_load_config: Whether or not to restore configuration
+                values from the previously saved `output_dir + "/config.json"`?
+                Defaults to :obj:`True` if `output_dir` is not None.
+            auto_save_config: Whether or not to save configuration
+                values into `output_dir + "/config.json"`?
+                Defaults to :obj:`True` if `output_dir` is not None.
+            discard_undefind_config_fields: The mode to deal with undefined
+                config fields when loading from previously saved config file.
+                Defaults to ``DiscardMode.WARN``, where the undefined config
+                fields are automatically discarded, with a warning generated.
+
             create_output_dir: Whether or not to automatically create
                 `output_dir`, when entering the experiment context,
                 if it does not exist?  Defaults to :obj:`True`.
-            load_config_file: Whether or not to restore configuration
-                values from `output_dir + "/config.json"`?
-            save_config_file: Whether or not to save configuration
-                values into `output_dir + "/config.json"`?
-            args: The CLI arguments.  If not specified, use ``sys.argv[1:]``.
-                Specifying :obj:`None` will disable parsing the arguments.
-            discard_undefind_config_fields: One of {True, False, 'warn'},
-                indicating whether to discard undefined fields from previously
-                saved config file.  If True or 'warn', will discard undefined
-                fields.  In addition, a warning will be generated if the
-                argument value is 'warn'.  Defaults to 'warn'.
         """
         # validate the arguments
         config_or_cls_okay = True
@@ -146,9 +163,9 @@ class Experiment(Generic[TConfig]):
             script_name = os.path.splitext(
                 os.path.basename(sys.modules['__main__'].__file__))[0]
 
-        if output_dir is None:
-            output_dir = os.environ.get('MLSTORAGE_OUTPUT_DIR', None)
-        if output_dir is None:
+        if output_dir is NOT_SET:
+            output_dir = os.environ.get('MLSTORAGE_OUTPUT_DIR', NOT_SET)
+        if output_dir is NOT_SET:
             candidate_dir = f'./results/{script_name}'
             while os.path.exists(candidate_dir):
                 time.sleep(0.01)
@@ -159,22 +176,32 @@ class Experiment(Generic[TConfig]):
                 )
                 candidate_dir = f'./results/{script_name}_{suffix}'
             output_dir = candidate_dir
-        output_dir = os.path.abspath(output_dir)
+        if output_dir is not None:
+            output_dir = os.path.abspath(output_dir)
+            if auto_load_config is NOT_SET:
+                auto_load_config = True
+            if auto_save_config is NOT_SET:
+                auto_save_config = True
 
         if args is NOT_SET:
             args = sys.argv[1:]
         if args is not None:
             args = tuple(map(str, args))
 
+        # if auto_load_config is NOT_SET:
+        #     auto_load_config = output_dir is not None
+        # if auto_save_config is NOT_SET:
+        #     auto_save_config = output_dir is not None
+
         # memorize the arguments
+        self._config = config
         self._script_name = script_name
         self._output_dir = output_dir
-        self._create_output_dir = create_output_dir
-        self._config = config
-        self._load_config_file = load_config_file
-        self._save_config_file = save_config_file
         self._args = args
-        self._load_config_discard_undefined = discard_undefind_config_fields
+        self._auto_load_config = auto_load_config
+        self._auto_save_config = auto_save_config
+        self._discard_undefind_config_fields = discard_undefind_config_fields
+        self._create_output_dir = create_output_dir
 
         # the event
         self._events = EventHost()
@@ -235,8 +262,14 @@ class Experiment(Generic[TConfig]):
         return self._script_name
 
     @property
-    def output_dir(self) -> str:
-        """Get the output directory of this experiment."""
+    def output_dir(self) -> Optional[str]:
+        """
+        Get the output directory of this experiment.
+
+        Returns:
+            The output directory, or :obj:`None` if the experiment object
+            does not have an output directory.
+        """
         return self._output_dir
 
     @property
@@ -283,6 +316,10 @@ class Experiment(Generic[TConfig]):
         """
         return self._on_exit
 
+    def _require_output_dir(self):
+        if self._output_dir is None:
+            raise RuntimeError('No output directory is configured.')
+
     def _on_before_push_doc(self, updates: Dict[str, Any]):
         """Callback to save the updated fields to local JSON file."""
 
@@ -292,6 +329,10 @@ class Experiment(Generic[TConfig]):
             updated_fields,
             updates,
             keys_to_expand=('config', 'default_config', 'result'))
+
+        # if no output dir, do not save anything
+        if self._output_dir is None:
+            return
 
         # now save the interested fields
         def save_json_file(path, obj, merge: bool = False):
@@ -324,7 +365,7 @@ class Experiment(Generic[TConfig]):
                            updated_fields['result'], merge=True)
 
     def save_config(self):
-        """Save the config local file and remote server."""
+        """Save the config into local file and to remote server."""
         self._remote_doc.update(
             {
                 'config': config_to_dict(self.config, flatten=True),
@@ -358,6 +399,7 @@ class Experiment(Generic[TConfig]):
         Returns:
             The absolute path of `relpath`.
         """
+        self._require_output_dir()
         return os.path.join(self.output_dir, relpath)
 
     def make_dirs(self, relpath: str, exist_ok: bool = True) -> str:
@@ -372,6 +414,7 @@ class Experiment(Generic[TConfig]):
         Returns:
             The absolute path of `relpath`.
         """
+        self._require_output_dir()
         path = self.abspath(relpath)
         os.makedirs(path, exist_ok=exist_ok)
         return path
@@ -390,6 +433,7 @@ class Experiment(Generic[TConfig]):
         Returns:
             The absolute path of `relpath`.
         """
+        self._require_output_dir()
         path = self.abspath(relpath)
         parent_dir = os.path.split(path)[0]
         os.makedirs(parent_dir, exist_ok=exist_ok)
@@ -412,6 +456,7 @@ class Experiment(Generic[TConfig]):
         Returns:
             The opened file.
         """
+        self._require_output_dir()
         if make_parent is NOT_SET:
             make_parent = any(s in mode for s in 'aw+')
 
@@ -440,6 +485,7 @@ class Experiment(Generic[TConfig]):
             append: Whether or not to append to the file?
             encoding: The text encoding.
         """
+        self._require_output_dir()
         with self.open_file(relpath, 'ab' if append else 'wb',
                             encoding=encoding) as f:
             f.write(content)
@@ -457,6 +503,7 @@ class Experiment(Generic[TConfig]):
         Returns:
             The file content.
         """
+        self._require_output_dir()
         with self.open_file(relpath, 'rb', encoding=encoding) as f:
             return f.read()
 
@@ -480,6 +527,8 @@ class Experiment(Generic[TConfig]):
         Returns:
             The absolute path of the archive file.
         """
+        self._require_output_dir()
+
         def _copy_dir(src: str, dst: str):
             os.makedirs(dst, exist_ok=True)
 
@@ -548,6 +597,7 @@ class Experiment(Generic[TConfig]):
         See Also:
             :meth:`make_archive()`
         """
+        self._require_output_dir()
         self.on_exit.do(lambda: self.make_archive(
             source_dir=source_dir,
             archive_file=archive_file,
@@ -571,6 +621,10 @@ class Experiment(Generic[TConfig]):
             if output_dir is not NOT_SET:
                 # special hack: override `output_dir` if specified
                 self._output_dir = os.path.abspath(output_dir)
+                if self._auto_load_config is NOT_SET:
+                    self._auto_load_config = True
+                if self._auto_save_config is NOT_SET:
+                    self._auto_save_config = True
                 parsed_args.output_dir = NOT_SET
 
             parsed_args = {
@@ -581,7 +635,7 @@ class Experiment(Generic[TConfig]):
             parsed_args = {}
 
         # load previously saved configuration
-        if self._load_config_file:
+        if self._auto_load_config:
             config_files = [
                 os.path.join(self.output_dir, 'config.yml'),
                 os.path.join(self.output_dir, 'config.json'),
@@ -599,17 +653,17 @@ class Experiment(Generic[TConfig]):
 
         # finally, generate the config object
         self._config = config_loader.get(
-            discard_undefined=self._load_config_discard_undefined)
+            discard_undefined=self._discard_undefind_config_fields)
 
         # prepare for the output dir
-        if self._create_output_dir:
+        if self._output_dir is not None and self._create_output_dir:
             os.makedirs(self.output_dir, exist_ok=True)
 
         # start the remote doc background worker
         self._remote_doc.start_worker()
 
         # save the configuration
-        if self._save_config_file:
+        if self._auto_save_config:
             self.save_config()
 
         # trigger the on enter event

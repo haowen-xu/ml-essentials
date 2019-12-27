@@ -118,15 +118,6 @@ class TypeCheckErrorTestCase(unittest.TestCase):
         )
 
 
-class TypeCheckContextTestCase(unittest.TestCase):
-
-    def test_construct(self):
-        with pytest.raises(ValueError,
-                           match=r"`discard_undefined` must be one of \{True, "
-                                 r"False, 'warn'\}: got 'xyz'"):
-            _ = TypeCheckContext(discard_undefined='xyz')
-
-
 class TypeInfoTestCase(unittest.TestCase):
 
     def test_base(self):
@@ -1411,7 +1402,7 @@ class TypeInfoTestCase(unittest.TestCase):
             Sink, fields={'value': ObjectFieldInfo('value', ti)}
         )
 
-        # discard_undefined = False
+        # discard_undefined = NO
         self.assertEqual(
             ti.check_value({'a': 123, 'b': 456}, TypeCheckContext()),
             Sink(a=123, b=456)
@@ -1419,11 +1410,11 @@ class TypeInfoTestCase(unittest.TestCase):
         self.assertEqual(logs, [{'a': 123, 'b': 456}])
         logs.clear()
 
-        # discard_undefined = True
+        # discard_undefined = SILENT
         self.assertEqual(
             ti.check_value(
                 {'a': 123, 'b': 456},
-                TypeCheckContext(discard_undefined=True)),
+                TypeCheckContext(discard_undefined=DiscardMode.SILENT)),
             Sink(a=123)
         )
         self.assertEqual(logs, [{'a': 123}])

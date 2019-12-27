@@ -2,6 +2,7 @@ from datetime import timedelta, datetime
 from typing import *
 
 import numpy as np
+import pprint
 from terminaltables import AsciiTable
 
 from .config import Config, config_to_dict
@@ -20,7 +21,7 @@ def format_key_values(key_values: Union[Dict,
                                         Config,
                                         Iterable[Tuple[str, Any]]],
                       title: Optional[str] = None,
-                      formatter: Callable[[Any], str] = str,
+                      formatter: Callable[[Any], str] = pprint.pformat,
                       delimiter_char: str = '=') -> str:
     """
     Format key value sequence into str.
