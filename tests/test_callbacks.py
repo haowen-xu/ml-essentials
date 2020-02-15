@@ -21,43 +21,49 @@ from tests.helpers import new_callback_data
 class CallbackListTestCase(unittest.TestCase):
 
     def test_CallbackList(self):
-        # test sort by priority
         def make_callback(priority: int):
             cb = Callback()
             cb.priority = priority
             return cb
 
-        desired_list = CallbackList([make_callback(i) for i in range(-10, 10)])
-        self.assertListEqual(
-            CallbackList.new(desired_list),
-            desired_list
+        # test construct and copy
+        orig_list = [make_callback(i) for i in range(-10, 10, 2)]
+        cb_list = CallbackList(orig_list)
+        self.assertEqual(len(cb_list), len(orig_list))
+        self.assertTrue(all(a == b for a, b in zip(cb_list, orig_list)))
+        self.assertTrue(all(cb_list[i] == orig_list[i] for i in range(len(orig_list))))
+
+        self.assertEqual(copy.copy(cb_list), cb_list)
+        self.assertEqual(CallbackList(cb_list), cb_list)
+        self.assertEqual(
+            CallbackList(reversed(cb_list)),
+            cb_list
         )
-        self.assertListEqual(
-            CallbackList.new(reversed(desired_list)),
-            desired_list
-        )
-        temp_list = copy.copy(desired_list)
-        self.assertIsInstance(temp_list, CallbackList)
+
+        temp_list = list(cb_list)
         random.shuffle(temp_list)
-        self.assertListEqual(
-            CallbackList.new(temp_list),
-            desired_list
-        )
+        self.assertEqual(CallbackList(temp_list), cb_list)
 
-        # test logger factory
-        cb = LoggerCallback()
-        cb2 = LoggerCallback()
+        # test add
+        new_cb = make_callback(6)
+        orig_list = orig_list[:9] + [new_cb] + orig_list[9:]
+        cb_list.add(new_cb)
+        self.assertEqual(list(cb_list), orig_list)
 
-        self.assertListEqual(
-            CallbackList.new(desired_list, logger_factory=(lambda: cb)),
-            desired_list + [cb]
-        )
-        self.assertListEqual(
-            CallbackList.new(
-                [cb2] + desired_list,
-                logger_factory=(lambda: cb)),
-            desired_list + [cb2]
-        )
+        new_cb = make_callback(5)
+        orig_list = orig_list[:8] + [new_cb] + orig_list[8:]
+        cb_list.add(new_cb)
+        self.assertEqual(list(cb_list), orig_list)
+
+        # test del
+        del orig_list[3]
+        del cb_list[3]
+        self.assertEqual(list(cb_list), orig_list)
+
+        cb = orig_list[2]
+        del orig_list[2]
+        cb_list.remove(cb)
+        self.assertEqual(list(cb_list), orig_list)
 
     def test_builtin_priority(self):
         orders = [

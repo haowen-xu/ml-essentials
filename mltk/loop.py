@@ -134,15 +134,23 @@ class BaseLoop(metaclass=DocInherit):
             remote_doc = ExperimentDoc.default_doc()
 
         # merge `callbacks` with `stage.callbacks`, sort them into proper
-        # order, and add default callbacks if not given.
-        self._callbacks = CallbackList.new(
-            list(chain(stage.callbacks, callbacks)),
-            logger_factory=lambda: LoggerCallback(remote_doc=remote_doc)
-        )
-        self.logger = next(cb for cb in reversed(self._callbacks)
-                           if isinstance(cb, LoggerCallback))
-        stage.callbacks = CallbackList(
-            [self._LoopEventCallbackClass(self, stage)] + self._callbacks)
+        # order, and add default logger callback if not given.
+        callbacks = CallbackList(list(chain(stage.callbacks, callbacks)))
+        logger = None
+        for cb in reversed(callbacks):
+            if isinstance(cb, LoggerCallback):
+                logger = cb
+                break
+        if logger is None:
+            logger = LoggerCallback(remote_doc=remote_doc)
+            callbacks.add(logger)
+
+        self._callbacks = callbacks
+        self.logger = logger
+
+        # also modify the callbacks of the stage
+        stage.callbacks = self._callbacks.clone()
+        stage.add_callback(self._LoopEventCallbackClass(self, stage))
 
         self.parent = parent
         self._child_stack = []
@@ -167,6 +175,16 @@ class BaseLoop(metaclass=DocInherit):
     @property
     def max_batch(self) -> Optional[int]:
         return self._stage.batch.total
+
+    def add_callback(self, callback: Callback):
+        """Add a callback to this loop."""
+        self._callbacks.add(callback)
+        self._stage.add_callback(callback)
+
+    def remove_callback(self, callback: Callback):
+        """Remove a callback from this loop."""
+        self._callbacks.remove(callback)
+        self._stage.remove_callback(callback)
 
     def add_metrics(self,
                     metrics_: Optional[Dict[str, Any]] = None,
@@ -463,6 +481,51 @@ class BaseLoop(metaclass=DocInherit):
         self._stage.exit(self._stage_metrics)
 
 
+class AfterEveryFewCyclesCallback(object):
+
+    loop: 'TrainLoop'
+    fn: Callable[[], None]
+
+    def __init__(self, fn: Callable[[], None], loop: 'TrainLoop'):
+        self.fn = fn
+        self.loop = loop
+
+    def __call__(self):
+        raise NotImplementedError()
+
+
+class AfterEveryFewEpochsCallback(AfterEveryFewCyclesCallback):
+
+    epochs: int
+
+    def __init__(self, fn: Callable[[], None], loop: 'TrainLoop', epochs: int):
+        if epochs <= 0 or abs(epochs - int(epochs)) > 1e-6:
+            raise ValueError(f'`epochs` must be a positive integer: got {epochs}')
+
+        super().__init__(fn, loop)
+        self.epochs = int(epochs)
+
+    def __call__(self):
+        if self.loop.epoch % self.epochs == 0:
+            return self.fn()
+
+
+class AfterEveryFewBatchesCallback(AfterEveryFewCyclesCallback):
+
+    batches: int
+
+    def __init__(self, fn: Callable[[], None], loop: 'TrainLoop', batches: int):
+        if batches <= 0 or abs(batches - int(batches)) > 1e-6:
+            raise ValueError(f'`batches` must be a positive integer: got {batches}')
+
+        super().__init__(fn, loop)
+        self.batches = int(batches)
+
+    def __call__(self):
+        if self.loop.batch % self.batches == 0:
+            return self.fn()
+
+
 class TrainLoop(BaseLoop):
 
     _LoopEventCallbackClass = _TrainLoopEventCallback
@@ -520,6 +583,54 @@ class TrainLoop(BaseLoop):
     @property
     def max_epoch(self):
         return self._stage.epoch.total
+
+    def after_every(self,
+                    fn: Callable[[], None],
+                    *,
+                    epochs: Optional[int] = None,
+                    batches: Optional[int] = None,
+                    ) -> Optional[AfterEveryFewCyclesCallback]:
+        """
+        Register a callback that runs after every few epochs or batches.
+
+        Args:
+            fn: The callback to run.
+            epochs: The number of epochs.
+            batches: The number of batches.
+
+        Returns:
+            Returns a callback object, which can be un-registered via
+            :meth:`cancel_after_every`, if either `epochs` or `batches`
+            is specified.
+        """
+        if epochs is not None and batches is not None:
+            raise ValueError('`epochs` and `batches` cannot be both specified.')
+
+        if epochs is not None:
+            cb = AfterEveryFewEpochsCallback(fn, self, epochs)
+            self.on_epoch_end.do(cb)
+        elif batches is not None:
+            cb = AfterEveryFewBatchesCallback(fn, self, batches)
+            self.on_batch_end.do(cb)
+        else:
+            cb = None
+
+        return cb
+
+    def cancel_after_every(self, cb: Optional[AfterEveryFewCyclesCallback]):
+        """
+        Cancel a callback registered by :meth:`after_every()`.
+
+        Args:
+            cb: The callback object.
+        """
+        if cb is not None:
+            if isinstance(cb, AfterEveryFewEpochsCallback):
+                self.on_epoch_end.cancel_do(cb)
+            elif isinstance(cb, AfterEveryFewBatchesCallback):
+                self.on_batch_end.cancel_do(cb)
+            else:  # pragma: no cover
+                raise TypeError(f'Unsupported callback: {cb!r}')
 
     def iter_batches(self,
                      data_generator: Optional[

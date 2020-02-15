@@ -258,7 +258,7 @@ class StageTestCase(unittest.TestCase):
         self.assertIsNone(stage.global_step)
         self.assertEqual(stage.memo, {})
         self.assertIsInstance(stage.callbacks, CallbackList)
-        self.assertEqual(stage.callbacks, [])
+        self.assertEqual(list(stage.callbacks), [])
         self.assertIsNone(stage.known_metrics)
 
         self.assertEqual(stage.best_validation_mark, False)
@@ -298,10 +298,6 @@ class StageTestCase(unittest.TestCase):
         self.assertEqual(stage.known_metrics, ('test_loss',))
 
     def test_train_cycle(self):
-        def next_timer(state=[0.]):
-            state[0] += 1
-            return state[0]
-
         def assert_logs(names, data):
             buf = []
             for name in names:
@@ -311,144 +307,160 @@ class StageTestCase(unittest.TestCase):
                 buf.append(name_data)
             self.assertEqual(cb.logs, buf)
 
-        with mock.patch('time.time', next_timer):
-            cb = _TestHelperCallback()
+        for add_callback_mode in (0, 1):
+            next_timer_state = [0.]
 
-            ####################
-            # test train stage #
-            ####################
-            stage = Stage(
-                StageType.TRAIN,
-                epoch=2,
-                max_epoch=10,
-                batch=3,
-                max_batch=11,
-                global_step=123,
-                callbacks=[cb],
-            )
+            def next_timer():
+                next_timer_state[0] += 1
+                return next_timer_state[0]
 
-            # enter
-            cb.logs.clear()
-            stage.best_validation_mark = stage.is_active = \
-                stage.termination_requested = stage.start_timestamp = \
-                stage.end_timestamp = NOT_SET
-            stage.enter()
-            self.assertEqual(stage.epoch.index, 2)
-            self.assertEqual(stage.epoch.is_active, False)
-            self.assertEqual(stage.batch.index, 3)
-            self.assertEqual(stage.batch.is_active, False)
-            self.assertEqual(stage.global_step, 123)
-            self.assertEqual(stage.best_validation_mark, False)
-            self.assertEqual(stage.is_active, True)
-            self.assertEqual(stage.termination_requested, False)
-            self.assertEqual(stage.start_timestamp, 1.)
-            self.assertEqual(stage.end_timestamp, None)
-            assert_logs(
-                ['on_stage_begin', 'on_train_begin'],
-                {'start_timestamp': 1.},
-            )
-            self.assertIsNone(stage.get_eta())
+            with mock.patch('time.time', next_timer):
+                cb = _TestHelperCallback()
+                cb2 = _TestHelperCallback()
 
-            with pytest.raises(RuntimeError,
-                               match='`Stage` is neither re-entrant, nor '
-                                     'reusable'):
+                ####################
+                # test train stage #
+                ####################
+                initial_callbacks = [cb, cb2] if add_callback_mode == 0 else []
+                stage = Stage(
+                    StageType.TRAIN,
+                    epoch=2,
+                    max_epoch=10,
+                    batch=3,
+                    max_batch=11,
+                    global_step=123,
+                    callbacks=initial_callbacks,
+                )
+                if add_callback_mode == 1:
+                    stage.add_callback(cb)
+                    stage.add_callback(cb2)
+                stage.remove_callback(cb2)
+
+                # enter
+                cb.logs.clear()
+                stage.best_validation_mark = stage.is_active = \
+                    stage.termination_requested = stage.start_timestamp = \
+                    stage.end_timestamp = NOT_SET
                 stage.enter()
+                self.assertEqual(stage.epoch.index, 2)
+                self.assertEqual(stage.epoch.is_active, False)
+                self.assertEqual(stage.batch.index, 3)
+                self.assertEqual(stage.batch.is_active, False)
+                self.assertEqual(stage.global_step, 123)
+                self.assertEqual(stage.best_validation_mark, False)
+                self.assertEqual(stage.is_active, True)
+                self.assertEqual(stage.termination_requested, False)
+                self.assertEqual(stage.start_timestamp, 1.)
+                self.assertEqual(stage.end_timestamp, None)
+                assert_logs(
+                    ['on_stage_begin', 'on_train_begin'],
+                    {'start_timestamp': 1.},
+                )
+                self.assertIsNone(stage.get_eta())
 
-            # enter epoch
-            cb.logs.clear()
-            stage._current_epoch_size = NOT_SET
-            stage.best_validation_mark = NOT_SET
+                with pytest.raises(RuntimeError,
+                                   match='`Stage` is neither re-entrant, nor '
+                                         'reusable'):
+                    stage.enter()
 
-            stage.enter_epoch(epoch_size=987)
-            self.assertEqual(stage.epoch.index, 3)
-            self.assertEqual(stage.epoch.is_active, True)
-            self.assertEqual(stage._current_epoch_size, 987)
-            self.assertEqual(stage.best_validation_mark, False)
-            assert_logs(
-                ['on_epoch_begin', 'on_train_epoch_begin'],
-                {'index': 3, 'size': 987, 'start_timestamp': 2.},
-            )
+                # enter epoch
+                cb.logs.clear()
+                stage._current_epoch_size = NOT_SET
+                stage.best_validation_mark = NOT_SET
 
-            with pytest.raises(RuntimeError,
-                               match='Stage .* does not have an epoch counter'):
-                Stage(StageType.TEST).enter_epoch()
+                stage.enter_epoch(epoch_size=987)
+                self.assertEqual(stage.epoch.index, 3)
+                self.assertEqual(stage.epoch.is_active, True)
+                self.assertEqual(stage._current_epoch_size, 987)
+                self.assertEqual(stage.best_validation_mark, False)
+                assert_logs(
+                    ['on_epoch_begin', 'on_train_epoch_begin'],
+                    {'index': 3, 'size': 987, 'start_timestamp': 2.},
+                )
 
-            # enter batch
-            cb.logs.clear()
-            stage._current_batch_size = NOT_SET
-            stage.best_validation_mark = NOT_SET
+                with pytest.raises(RuntimeError,
+                                   match='Stage .* does not have an epoch counter'):
+                    Stage(StageType.TEST).enter_epoch()
 
-            stage.enter_batch(batch_size=123)
-            self.assertEqual(stage.batch.index, 4)
-            self.assertEqual(stage.global_step, 124)
-            self.assertEqual(stage.batch.is_active, True)
-            self.assertEqual(stage._current_batch_size, 123)
-            self.assertEqual(stage.best_validation_mark, False)
-            assert_logs(
-                ['on_batch_begin', 'on_train_batch_begin'],
-                {'index': 4, 'size': 123, 'start_timestamp': 3.},
-            )
+                # enter batch
+                cb.logs.clear()
+                stage._current_batch_size = NOT_SET
+                stage.best_validation_mark = NOT_SET
 
-            # exit batch
-            stage.best_validation_mark = True
-            cb.logs.clear()
-            stage.exit_batch({'loss': 0.25})
-            self.assertEqual(stage.batch.index, 4)
-            self.assertEqual(stage.global_step, 124)
-            self.assertEqual(stage.batch.is_active, False)
-            self.assertIsNone(stage._current_batch_size)
-            self.assertEqual(stage.best_validation_mark, True)
-            assert_logs(
-                ['on_train_batch_end', 'on_batch_end'],
-                {
-                    'index': 4, 'size': 123, 'start_timestamp': 3.,
-                    'end_timestamp': 4., 'exc_time': 1.,
-                    'metrics': {'loss': 0.25},
-                },
-            )
+                stage.enter_batch(batch_size=123)
+                self.assertEqual(stage.batch.index, 4)
+                self.assertEqual(stage.global_step, 124)
+                self.assertEqual(stage.batch.is_active, True)
+                self.assertEqual(stage._current_batch_size, 123)
+                self.assertEqual(stage.best_validation_mark, False)
+                assert_logs(
+                    ['on_batch_begin', 'on_train_batch_begin'],
+                    {'index': 4, 'size': 123, 'start_timestamp': 3.},
+                )
 
-            # exit epoch
-            stage.best_validation_mark = True
-            cb.logs.clear()
-            stage.exit_epoch({'acc': 0.875})
-            self.assertEqual(stage.epoch.index, 3)
-            self.assertEqual(stage.epoch.is_active, False)
-            self.assertEqual(stage.batch.index, 4)
-            self.assertEqual(stage.batch.is_active, False)
-            self.assertEqual(stage._current_batch_size, None)
-            self.assertEqual(stage.best_validation_mark, True)
-            assert_logs(
-                ['on_train_epoch_end', 'on_epoch_end'],
-                {
-                    'index': 3, 'size': 987, 'start_timestamp': 2.,
-                    'end_timestamp': 5., 'exc_time': 3.,
-                    'metrics': {'acc': 0.875},
-                },
-            )
+                # exit batch
+                stage.best_validation_mark = True
+                cb.logs.clear()
+                stage.exit_batch({'loss': 0.25})
+                self.assertEqual(stage.batch.index, 4)
+                self.assertEqual(stage.global_step, 124)
+                self.assertEqual(stage.batch.is_active, False)
+                self.assertIsNone(stage._current_batch_size)
+                self.assertEqual(stage.best_validation_mark, True)
+                assert_logs(
+                    ['on_train_batch_end', 'on_batch_end'],
+                    {
+                        'index': 4, 'size': 123, 'start_timestamp': 3.,
+                        'end_timestamp': 4., 'exc_time': 1.,
+                        'metrics': {'loss': 0.25},
+                    },
+                )
 
-            with pytest.raises(RuntimeError,
-                               match='Stage .* does not have an epoch counter'):
-                Stage(StageType.TEST).exit_epoch()
+                # exit epoch
+                stage.best_validation_mark = True
+                cb.logs.clear()
+                stage.exit_epoch({'acc': 0.875})
+                self.assertEqual(stage.epoch.index, 3)
+                self.assertEqual(stage.epoch.is_active, False)
+                self.assertEqual(stage.batch.index, 4)
+                self.assertEqual(stage.batch.is_active, False)
+                self.assertEqual(stage._current_batch_size, None)
+                self.assertEqual(stage.best_validation_mark, True)
+                assert_logs(
+                    ['on_train_epoch_end', 'on_epoch_end'],
+                    {
+                        'index': 3, 'size': 987, 'start_timestamp': 2.,
+                        'end_timestamp': 5., 'exc_time': 3.,
+                        'metrics': {'acc': 0.875},
+                    },
+                )
 
-            # exit
-            stage.end_timestamp = NOT_SET
-            stage.best_validation_mark = True
-            cb.logs.clear()
-            stage.exit({'ll': 0.125})
-            self.assertEqual(stage.end_timestamp, 6.)
-            self.assertEqual(stage.is_active, False)
-            self.assertEqual(stage.epoch.index, 3)
-            self.assertEqual(stage.epoch.is_active, False)
-            self.assertEqual(stage.batch.index, 4)
-            self.assertEqual(stage.batch.is_active, False)
-            self.assertEqual(stage.best_validation_mark, True)
-            assert_logs(
-                ['on_train_end', 'on_stage_end'],
-                {
-                    'start_timestamp': 1., 'end_timestamp': 6.,
-                    'exc_time': 5., 'metrics': {'ll': 0.125},
-                },
-            )
+                with pytest.raises(RuntimeError,
+                                   match='Stage .* does not have an epoch counter'):
+                    Stage(StageType.TEST).exit_epoch()
+
+                # exit
+                stage.end_timestamp = NOT_SET
+                stage.best_validation_mark = True
+                cb.logs.clear()
+                stage.exit({'ll': 0.125})
+                self.assertEqual(stage.end_timestamp, 6.)
+                self.assertEqual(stage.is_active, False)
+                self.assertEqual(stage.epoch.index, 3)
+                self.assertEqual(stage.epoch.is_active, False)
+                self.assertEqual(stage.batch.index, 4)
+                self.assertEqual(stage.batch.is_active, False)
+                self.assertEqual(stage.best_validation_mark, True)
+                assert_logs(
+                    ['on_train_end', 'on_stage_end'],
+                    {
+                        'start_timestamp': 1., 'end_timestamp': 6.,
+                        'exc_time': 5., 'metrics': {'ll': 0.125},
+                    },
+                )
+
+                # cb2 should not be ever called
+                self.assertEqual(cb2.logs, [])
 
     def test_state_proxy(self):
         #########

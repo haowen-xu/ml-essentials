@@ -153,36 +153,72 @@ class Callback(object):
         pass  # pragma: no cover
 
 
-class CallbackList(list, MutableSequence[Callback]):
+class CallbackList(Sequence[Callback]):
+    """
+    A callback list, which maintains the orders of callbacks according to
+    their priority.
+    """
 
-    @classmethod
-    def new(cls,
-            callbacks: Iterable[Callback] = (),
-            logger_factory: Optional[Callable[[], 'LoggerCallback']] = None
-            ) -> 'CallbackList':
-        """
-        Construct a new :class:`CallbackList`, with items of `callbacks`
-        sorted according to their ``priority``, and a :class:`LoggerCallback`
-        added to the end if not any one logger callback is specified.
+    _SORTED = object()
 
-        Args:
-            callbacks: The callbacks to be added to this :class:`CallbackList`.
-            logger_factory: If specified, will construct a default
-                :class:`LoggerCallback` instance, in case no instance is given
-                in `callbacks`.  Defaults to :obj:`None`.
+    def __init__(self,
+                 callbacks: Optional[Iterator[Callback]] = None,
+                 *,
+                 _sorted=None):
+        if callbacks is not None:
+            if _sorted is not self._SORTED:
+                callbacks = sorted(callbacks, key=lambda cb: cb.priority)
+            else:
+                callbacks = list(callbacks)
+        self._callbacks = callbacks
 
-        Returns:
-            The callback list.
-        """
-        callbacks = sorted(callbacks, key=lambda cb: cb.priority)
-        if logger_factory is not None:
-            if not any(isinstance(cb, LoggerCallback)
-                       for cb in reversed(callbacks)):
-                callbacks.append(logger_factory())
-        return CallbackList(callbacks)
+    def __len__(self) -> int:
+        return len(self._callbacks)
+
+    def __iter__(self):
+        return iter(self._callbacks)
+
+    def __eq__(self, other):
+        return isinstance(other, CallbackList) and \
+            self._callbacks == other._callbacks
+
+    def __getitem__(self, item):
+        return self._callbacks[item]
+
+    def __delitem__(self, item):
+        del self._callbacks[item]
 
     def __copy__(self):
-        return CallbackList(self)
+        return self.clone()
+
+    def clone(self) -> 'CallbackList':
+        return CallbackList(self._callbacks, _sorted=self._SORTED)
+
+    def add(self, callback: Callback):
+        """
+        Add a callback to this list, respecting the `priority`.
+
+        Args:
+            callback: The callback object.
+        """
+        i = len(self._callbacks) - 1
+        while i > -1:
+            if self._callbacks[i].priority <= callback.priority:
+                break
+            i -= 1
+        self._callbacks.insert(i + 1, callback)
+
+    def remove(self, callback: Callback):
+        """
+        Remove a callback from this list.
+
+        Args:
+            callback: The callback to be removed.
+
+        Raises:
+            ValueError: If `callback` is not present.
+        """
+        self._callbacks.remove(callback)
 
 
 @dataclass

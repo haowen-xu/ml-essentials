@@ -396,6 +396,14 @@ class Stage(object):
         """
         return _StageCounterState(self)
 
+    def add_callback(self, callback: 'Callback'):
+        """Add a callback to this stage."""
+        self.callbacks.add(callback)
+
+    def remove_callback(self, callback: 'Callback'):
+        """Remove a callback from this stage."""
+        self.callbacks.remove(callback)
+
     def get_eta(self) -> Optional[float]:
         if self.epoch is not None:
             # get the total batches

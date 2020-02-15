@@ -58,15 +58,25 @@ class BaseLoopTestCase(unittest.TestCase):
         random.shuffle(callbacks)
         loop = BaseLoop(stage=stage, callbacks=callbacks)
         self.assertEqual(loop._callbacks[:-1], expected_callbacks)
+        self.assertEqual(list(loop._stage.callbacks[1:-1]), expected_callbacks)
 
         stage = Stage(StageType.TEST)
         expected_callbacks.append(LoggerCallback())
         callbacks = copy.copy(expected_callbacks[:-1])
         random.shuffle(callbacks)
-        stage.callbacks.append(expected_callbacks[-1])
-        loop = BaseLoop(stage=stage, callbacks=callbacks)
-        self.assertEqual(loop._callbacks, expected_callbacks)
+        stage.add_callback(expected_callbacks[-1])
+        loop = BaseLoop(stage=stage)
+        for cb in callbacks:
+            loop.add_callback(cb)
+        self.assertEqual(list(loop._callbacks), expected_callbacks)
+        self.assertEqual(list(loop._stage.callbacks[1:]), expected_callbacks)
         self.assertIs(loop.logger, expected_callbacks[-1])
+
+        # remove callback
+        cb = expected_callbacks[0]
+        loop.remove_callback(cb)
+        self.assertEqual(list(loop._callbacks), expected_callbacks[1:])
+        self.assertEqual(list(loop._stage.callbacks[1:]), expected_callbacks[1:])
 
     def test_parent_child(self):
         # the parent loop
@@ -775,6 +785,37 @@ class TrainLoopTestCase(unittest.TestCase):
         loop.on_epoch_begin.do(lambda: logs.append('epoch_begin'))
         loop.on_epoch_end.do(lambda: logs.append('epoch_end'))
 
+        for freq in [1, 2]:
+            loop.after_every(
+                lambda freq=freq: logs.append(f'after_{freq}_epochs'),
+                epochs=freq,
+            )
+            loop.after_every(
+                lambda freq=freq: logs.append(f'after_{freq}_batches'),
+                batches=freq,
+            )
+
+        cb = loop.after_every(lambda: logs.append('XXX'), epochs=1)
+        loop.cancel_after_every(cb)
+        cb = loop.after_every(lambda: logs.append('YYY'), batches=1)
+        loop.cancel_after_every(cb)
+
+        self.assertIsNone(loop.after_every(lambda: logs.append('ZZZ')))
+        loop.cancel_after_every(None)
+
+        with pytest.raises(ValueError,
+                           match='`epochs` and `batches` cannot be both '
+                                 'specified'):
+            _ = loop.after_every(lambda: logs.append('WWW'), epochs=1, batches=1)
+
+        with pytest.raises(ValueError,
+                           match='`epochs` must be a positive integer'):
+            _ = loop.after_every(lambda: logs.append('WWW'), epochs=0)
+
+        with pytest.raises(ValueError,
+                           match='`batches` must be a positive integer'):
+            _ = loop.after_every(lambda: logs.append('WWW'), batches=0)
+
         with mock.patch('time.time', fake_timer):
             with loop:
                 loop.add_metrics({'pre_stage': 2.0})
@@ -794,19 +835,24 @@ class TrainLoopTestCase(unittest.TestCase):
             'batch_begin',
             "cb:batch_begin:{'index': 1, 'size': 3, 'start_timestamp': 0.0}",
             'batch_end',
+            'after_1_batches',
             "cb:batch_end:{'index': 1, 'size': 3, 'start_timestamp': 0.0, "
             "'end_timestamp': 0.0, 'exc_time': 0.0, 'metrics': {'i': 1, 'avg(x)': 1.0}}",
             'batch_begin',
             "cb:batch_begin:{'index': 2, 'size': 3, 'start_timestamp': 0.0}",
             'batch_end',
+            'after_1_batches',
+            'after_2_batches',
             "cb:batch_end:{'index': 2, 'size': 3, 'start_timestamp': 0.0, "
             "'end_timestamp': 0.0, 'exc_time': 0.0, 'metrics': {'i': 2, 'avg(x)': 4.0}}",
             'batch_begin',
             "cb:batch_begin:{'index': 3, 'size': 2, 'start_timestamp': 0.0}",
             'batch_end',
+            'after_1_batches',
             "cb:batch_end:{'index': 3, 'size': 2, 'start_timestamp': 0.0, "
             "'end_timestamp': 0.0, 'exc_time': 0.0, 'metrics': {'i': 3, 'avg(x)': 6.5}}",
             'epoch_end',
+            'after_1_epochs',
             "cb:epoch_end:{'index': 1, 'start_timestamp': 0.0, 'end_timestamp': 0.0, "
             "'exc_time': 0.0, 'metrics': {'pre_epoch': 3.0, 'j': 1, 'post_epoch': 4.0}}",
             'epoch_begin',
@@ -814,19 +860,25 @@ class TrainLoopTestCase(unittest.TestCase):
             'batch_begin',
             "cb:batch_begin:{'index': 1, 'size': 3, 'start_timestamp': 0.0}",
             'batch_end',
+            'after_1_batches',
             "cb:batch_end:{'index': 1, 'size': 3, 'start_timestamp': 0.0, "
             "'end_timestamp': 0.0, 'exc_time': 0.0, 'metrics': {'i': 1, 'avg(x)': 1.0}}",
             'batch_begin',
             "cb:batch_begin:{'index': 2, 'size': 3, 'start_timestamp': 0.0}",
             'batch_end',
+            'after_1_batches',
+            'after_2_batches',
             "cb:batch_end:{'index': 2, 'size': 3, 'start_timestamp': 0.0, "
             "'end_timestamp': 0.0, 'exc_time': 0.0, 'metrics': {'i': 2, 'avg(x)': 4.0}}",
             'batch_begin',
             "cb:batch_begin:{'index': 3, 'size': 2, 'start_timestamp': 0.0}",
             'batch_end',
+            'after_1_batches',
             "cb:batch_end:{'index': 3, 'size': 2, 'start_timestamp': 0.0, "
             "'end_timestamp': 0.0, 'exc_time': 0.0, 'metrics': {'i': 3, 'avg(x)': 6.5}}",
             'epoch_end',
+            'after_1_epochs',
+            'after_2_epochs',
             "cb:epoch_end:{'index': 2, 'start_timestamp': 0.0, 'end_timestamp': 0.0, "
             "'exc_time': 0.0, 'metrics': {'pre_epoch': 3.0, 'j': 2, 'post_epoch': 4.0}}",
             'end',
