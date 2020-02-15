@@ -584,12 +584,12 @@ class TrainLoop(BaseLoop):
     def max_epoch(self):
         return self._stage.epoch.total
 
-    def after_every(self,
-                    fn: Callable[[], None],
-                    *,
-                    epochs: Optional[int] = None,
-                    batches: Optional[int] = None,
-                    ) -> Optional[AfterEveryFewCyclesCallback]:
+    def run_after_every(self,
+                        fn: Callable[[], None],
+                        *,
+                        epochs: Optional[int] = None,
+                        batches: Optional[int] = None,
+                        ) -> Optional[AfterEveryFewCyclesCallback]:
         """
         Register a callback that runs after every few epochs or batches.
 
@@ -600,7 +600,7 @@ class TrainLoop(BaseLoop):
 
         Returns:
             Returns a callback object, which can be un-registered via
-            :meth:`cancel_after_every`, if either `epochs` or `batches`
+            :meth:`remove_after_every`, if either `epochs` or `batches`
             is specified.
         """
         if epochs is not None and batches is not None:
@@ -617,9 +617,9 @@ class TrainLoop(BaseLoop):
 
         return cb
 
-    def cancel_after_every(self, cb: Optional[AfterEveryFewCyclesCallback]):
+    def remove_after_every(self, cb: Optional[AfterEveryFewCyclesCallback]):
         """
-        Cancel a callback registered by :meth:`after_every()`.
+        Remove a callback registered by :meth:`run_after_every()`.
 
         Args:
             cb: The callback object.

@@ -786,35 +786,35 @@ class TrainLoopTestCase(unittest.TestCase):
         loop.on_epoch_end.do(lambda: logs.append('epoch_end'))
 
         for freq in [1, 2]:
-            loop.after_every(
+            loop.run_after_every(
                 lambda freq=freq: logs.append(f'after_{freq}_epochs'),
                 epochs=freq,
             )
-            loop.after_every(
+            loop.run_after_every(
                 lambda freq=freq: logs.append(f'after_{freq}_batches'),
                 batches=freq,
             )
 
-        cb = loop.after_every(lambda: logs.append('XXX'), epochs=1)
-        loop.cancel_after_every(cb)
-        cb = loop.after_every(lambda: logs.append('YYY'), batches=1)
-        loop.cancel_after_every(cb)
+        cb = loop.run_after_every(lambda: logs.append('XXX'), epochs=1)
+        loop.remove_after_every(cb)
+        cb = loop.run_after_every(lambda: logs.append('YYY'), batches=1)
+        loop.remove_after_every(cb)
 
-        self.assertIsNone(loop.after_every(lambda: logs.append('ZZZ')))
-        loop.cancel_after_every(None)
+        self.assertIsNone(loop.run_after_every(lambda: logs.append('ZZZ')))
+        loop.remove_after_every(None)
 
         with pytest.raises(ValueError,
                            match='`epochs` and `batches` cannot be both '
                                  'specified'):
-            _ = loop.after_every(lambda: logs.append('WWW'), epochs=1, batches=1)
+            _ = loop.run_after_every(lambda: logs.append('WWW'), epochs=1, batches=1)
 
         with pytest.raises(ValueError,
                            match='`epochs` must be a positive integer'):
-            _ = loop.after_every(lambda: logs.append('WWW'), epochs=0)
+            _ = loop.run_after_every(lambda: logs.append('WWW'), epochs=0)
 
         with pytest.raises(ValueError,
                            match='`batches` must be a positive integer'):
-            _ = loop.after_every(lambda: logs.append('WWW'), batches=0)
+            _ = loop.run_after_every(lambda: logs.append('WWW'), batches=0)
 
         with mock.patch('time.time', fake_timer):
             with loop:

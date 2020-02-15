@@ -863,11 +863,13 @@ class DataStream(object):
         import torch
         if device is not None:
             def mapper(*args):
-                return tuple(torch.from_numpy(a).detach().to(device)
-                             for a in args)
+                with torch.no_grad():
+                    return tuple(torch.from_numpy(a).detach().to(device)
+                                 for a in args)
         else:
             def mapper(*args):
-                return tuple(torch.from_numpy(a).detach() for a in args)
+                with torch.no_grad():
+                    return tuple(torch.from_numpy(a).detach() for a in args)
         return self.map(mapper, preserve_shapes=True)
 
 
