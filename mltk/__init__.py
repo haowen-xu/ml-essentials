@@ -1,6 +1,6 @@
 __version__ = '0.0.2'
 
-from . import callbacks, data, integration, type_check, utils
+from . import callbacks, data, type_check, utils
 from .batch_agg import *
 from .checkpoint import *
 from .config import *
