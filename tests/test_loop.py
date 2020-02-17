@@ -1,4 +1,6 @@
+import codecs
 import copy
+import json
 import os
 import random
 import unittest
@@ -11,7 +13,6 @@ from mock import Mock
 
 from mltk import *
 from mltk.callbacks import Callback, LoggerCallback, CallbackData
-
 from mltk.loop import BaseLoop, _BatchOnlyLoop
 
 
@@ -900,6 +901,27 @@ class TrainLoopTestCase(unittest.TestCase):
             self.assertIs(sub_loop._remote_doc, loop._remote_doc)
             self.assertEqual(sub_loop._callbacks, loop._callbacks)
             self.assertIs(sub_loop.parent, loop)
+
+    def test_final_result(self):
+        with TemporaryDirectory() as temp_dir:
+            with Experiment(Config, output_dir=temp_dir, args=[]) as exp:
+                train_stream = DataStream.arrays(
+                    [np.arange(5, dtype=np.float32)], batch_size=2)
+                test_stream = DataStream.arrays(
+                    [np.arange(10, 13, dtype=np.float32)], batch_size=2)
+
+                loop = TrainLoop(max_epoch=1)
+                loop.run(
+                    (lambda x: {'loss': np.mean(x ** 2), 'test_acc': np.mean(x)}),
+                    train_stream
+                )
+                loop.test().run((lambda x: {'test_acc': np.mean(x)}), test_stream)
+
+            with codecs.open(os.path.join(temp_dir, 'result.json'), 'rb', 'utf-8') as f:
+                cnt = json.loads(f.read())
+
+            self.assertAlmostEqual(cnt['test_acc']['mean'], 11.0)
+            self.assertAlmostEqual(cnt['loss']['mean'], 6.0)
 
 
 class BatchOnlyLoopTestCase(unittest.TestCase):

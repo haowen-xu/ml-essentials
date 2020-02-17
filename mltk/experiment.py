@@ -90,11 +90,6 @@ class Experiment(Generic[TConfig]):
     once again when resuming from an experiment.
     """
 
-    @deprecated_arg('load_config_file', 'auto_load_config')
-    @deprecated_arg('save_config_file', 'auto_save_config')
-    @deprecated_arg('create_output_dir',
-                    message='manually set `output_dir` to None if you do not '
-                            'need an output directory')
     def __init__(self,
                  config_or_cls: Union[Type[TConfig], TConfig],
                  *,
@@ -104,10 +99,6 @@ class Experiment(Generic[TConfig]):
                  auto_load_config: bool = True,
                  auto_save_config: bool = True,
                  discard_undefind_config_fields: Union[str, DiscardMode] = DiscardMode.WARN,
-                 # deprecated arguments
-                 create_output_dir: bool = True,
-                 load_config_file: bool = None,
-                 save_config_file: bool = None,
                  ):
         """
         Construct a new :class:`Experiment`.
@@ -187,7 +178,6 @@ class Experiment(Generic[TConfig]):
         self._auto_load_config = auto_load_config
         self._auto_save_config = auto_save_config
         self._discard_undefind_config_fields = discard_undefind_config_fields
-        self._create_output_dir = create_output_dir
 
         # the event
         self._events = EventHost()
@@ -638,7 +628,7 @@ class Experiment(Generic[TConfig]):
             discard_undefined=self._discard_undefind_config_fields)
 
         # prepare for the output dir
-        if self._output_dir is not None and self._create_output_dir:
+        if self._output_dir is not None:
             os.makedirs(self.output_dir, exist_ok=True)
 
         # start the remote doc background worker

@@ -153,16 +153,6 @@ class ExperimentTestCase(unittest.TestCase):
                     exp.make_dirs('abc')
             self.assertFalse(os.path.exists(output_dir))
 
-            # test `create_output_dir=False` (deprecated argument)
-            with Experiment(_YourConfig,
-                            output_dir=output_dir,
-                            args=[],
-                            auto_load_config=False,
-                            auto_save_config=False,
-                            create_output_dir=False):
-                pass
-            self.assertFalse(os.path.exists(output_dir))
-
             # test new output dir
             self.assertIsNone(get_active_experiment())
             with Experiment(_YourConfig, output_dir=output_dir,
