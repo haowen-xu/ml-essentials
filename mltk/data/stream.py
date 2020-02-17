@@ -408,17 +408,33 @@ class DataStream(object):
     def _minibatch_iterator(self) -> Generator[ArrayTuple, None, None]:
         raise NotImplementedError()
 
-    def get_arrays(self) -> ArrayTuple:
+    def get_arrays(self, max_batch: Optional[int] = None) -> ArrayTuple:
         """
         Collecting mini-batches into NumPy arrays.
 
         >>> x = np.arange(0, 5, dtype=np.int32)
         >>> stream = DataStream.arrays([x], batch_size=3).map(lambda t: t ** 2)
+
         >>> arrays = stream.get_arrays()
         >>> len(arrays)
         1
         >>> print(arrays[0])
         [ 0  1  4  9 16]
+
+        >>> arrays = stream.get_arrays(max_batch=1)
+        >>> len(arrays)
+        1
+        >>> print(arrays[0])
+        [0 1 4]
+
+        >>> arrays = stream.get_arrays(max_batch=0)
+        >>> len(arrays)
+        1
+        >>> print(arrays[0])
+        []
+
+        Args:
+            max_batch: If specified, will take at most this number of batches.
 
         Returns:
             The collected arrays.
@@ -446,10 +462,14 @@ class DataStream(object):
                     'empty data stream cannot be converted to arrays')
             try:
                 arrays_buf = [[arr] for arr in batch]
-                while True:
+                batch_index = 1
+                while max_batch is None or batch_index < max_batch:
                     batch = next(g)
                     for i, arr in enumerate(batch):
                         arrays_buf[i].append(arr)
+                    batch_index += 1
+                if max_batch == 0:
+                    arrays_buf = [[arr[0][:0]] for arr in arrays_buf]
             except StopIteration:
                 pass
             return tuple(np.concatenate(arr) for arr in arrays_buf)
@@ -847,30 +867,6 @@ class DataStream(object):
             source=self, mapper=mapper, data_shapes=data_shapes,
             array_count=array_count
         )
-
-    def to_torch_tensors(self, device: Optional[str] = None
-                         ) -> 'MapperDataStream':
-        """
-        Converts NumPy arrays to PyTorch tensors.
-
-        Args:
-            device: The device where to place the tensors.
-
-        Returns:
-            A mapper :class:`DataStream` that converts batch NumPy
-            arrays to PyTorch tensors.
-        """
-        import torch
-        if device is not None:
-            def mapper(*args):
-                with torch.no_grad():
-                    return tuple(torch.from_numpy(a).detach().to(device)
-                                 for a in args)
-        else:
-            def mapper(*args):
-                with torch.no_grad():
-                    return tuple(torch.from_numpy(a).detach() for a in args)
-        return self.map(mapper, preserve_shapes=True)
 
 
 class ArraysDataStream(DataStream):

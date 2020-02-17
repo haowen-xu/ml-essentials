@@ -10,7 +10,7 @@ from mltk.data import *
 # Do not delete the following line!
 # It checks whether DataStream is exposed to the root package.
 from mltk import DataStream
-from tests.helpers import slow_test, pytorch_test
+from tests.helpers import slow_test
 
 
 class DataStreamTestCase(unittest.TestCase):
@@ -83,36 +83,21 @@ class DataStreamTestCase(unittest.TestCase):
         np.testing.assert_allclose(b, x + y)
         np.testing.assert_allclose(c, y - z)
 
+        a, b, c = stream.get_arrays(1)
+        np.testing.assert_allclose(a, (y - z)[:3])
+        np.testing.assert_allclose(b, (x + y)[:3])
+        np.testing.assert_allclose(c, (y - z)[:3])
+
+        a, b, c = stream.get_arrays(0)
+        np.testing.assert_allclose(a, (y - z)[:0])
+        np.testing.assert_allclose(b, (x + y)[:0])
+        np.testing.assert_allclose(c, (y - z)[:0])
+
         # index out of range error
         stream = source.select([0, 1, 2])
         with pytest.raises(IndexError, match='.* index out of range'):
             for _ in stream:
                 pass
-
-    @pytorch_test
-    def test_to_torch_tensors(self):
-        import torch
-
-        x = np.random.normal(size=[5, 4])
-        y = np.random.normal(size=[5, 2, 3])
-        stream = DataStream.arrays([x, y], batch_size=3)
-
-        stream2 = stream.to_torch_tensors()
-        stream3 = stream.to_torch_tensors('cpu')
-
-        for s in (stream2, stream3):
-            self.assertEqual(s.batch_size, stream.batch_size)
-            self.assertEqual(s.array_count, stream.array_count)
-            self.assertEqual(s.data_shapes, stream.data_shapes)
-            self.assertEqual(s.data_length, stream.data_length)
-            self.assertEqual(s.batch_count, stream.batch_count)
-            for i, [batch_x, batch_y] in enumerate(s):
-                self.assertIsInstance(batch_x, torch.Tensor)
-                self.assertIsInstance(batch_y, torch.Tensor)
-                np.testing.assert_equal(batch_x.detach().cpu().numpy(),
-                                        x[i * 3: (i + 1) * 3])
-                np.testing.assert_equal(batch_y.detach().cpu().numpy(),
-                                        y[i * 3: (i + 1) * 3])
 
 
 class ArraysDataStreamTestCase(unittest.TestCase):
