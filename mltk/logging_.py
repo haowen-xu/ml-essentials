@@ -1,7 +1,9 @@
 import logging
 import sys
+from datetime import datetime
+from typing import *
 
-__all__ = ['configure_logging', 'clear_logging']
+__all__ = ['configure_logging', 'clear_logging', 'print_with_time']
 
 LOG_FORMAT: str = '[%(asctime)-15s] %(levelname)-8s %(message)s'
 
@@ -41,3 +43,18 @@ def clear_logging() -> None:
 
 
 configure_logging()  # configure logging by default settings
+
+
+def print_with_time(message: str,
+                    print_func: Callable[[str], None] = print):
+    """
+    Print a line of message with time time in front of it.
+
+    Args:
+        message: The message to be printed.
+        print_func: The print function.
+    """
+    from .formatting import format_as_asctime
+    dt_str = format_as_asctime(datetime.now())
+    message = f'[{dt_str}] {message}'
+    print_func(message)

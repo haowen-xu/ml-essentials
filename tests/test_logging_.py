@@ -1,7 +1,10 @@
 import logging
 import sys
 import unittest
+from datetime import datetime
 from logging import getLogger, StreamHandler
+
+import mock
 
 from mltk import *
 
@@ -28,3 +31,17 @@ class LoggingTestCase(unittest.TestCase):
         self.assertIs(logger.handlers[0].stream, sys.stdout)
         self.assertEqual(logger.level, logging.INFO)
         self.assertFalse(logger.propagate)
+
+    def test_print_with_time(self):
+        ret = []
+        dt = datetime.utcfromtimestamp(1576755571.662434)
+
+        class FakeDateTime(object):
+            def now(self):
+                return dt
+
+        with mock.patch('mltk.logging_.datetime', FakeDateTime()):
+            print_with_time('abc', ret.append)
+            self.assertEqual(ret, [
+                '[2019-12-19 11:39:31,662] abc'
+            ])

@@ -12,6 +12,7 @@ import numpy as np
 from .checkpoint import BaseCheckpoint, CheckpointManager
 from .errors import NaNMetricError
 from .formatting import MetricsFormatter, format_duration, format_as_asctime
+from .logging_ import print_with_time
 from .metrics import ScalarMetricsLogger, ScalarMetricCollector
 from .mlstorage import ExperimentDoc
 from .stateful import StatefulObjectGroup, StatefulObject
@@ -1007,10 +1008,8 @@ class AutoCheckpoint(BaseCheckpointCallback):
 
             if ckpt_path is not None:
                 self.checkpoint_manager.restore(ckpt_path)
-                getLogger(__name__).info(
-                    'Restored from the previous checkpoint: %s',
-                    ckpt_path
-                )
+                print_with_time(f'Restored from the previous checkpoint: '
+                                f'{ckpt_path}')
 
             # set `last_checkpoint_time` to the current timestamp, such that
             # the first checkpoint will not be saved immediately after the
@@ -1246,10 +1245,8 @@ class EarlyStopping(BaseCheckpointCallback):
                     )
                 else:
                     self.checkpoint_manager.restore(latest_checkpoint)
-                    getLogger(__name__).info(
-                        f'Restored early-stopping checkpoint from: %s',
-                        latest_checkpoint
-                    )
+                    print_with_time(f'Restored early-stopping checkpoint from: '
+                                    f'{latest_checkpoint}')
 
 
 # imported for type annotation on `Stage`

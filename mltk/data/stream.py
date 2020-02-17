@@ -8,7 +8,7 @@ import numpy as np
 
 from ..typing_ import *
 from ..utils import (minibatch_slices_iterator, AutoInitAndCloseable, NOT_SET,
-                     GeneratorIterator)
+                     GeneratorIterator, to_number_or_numpy)
 
 __all__ = [
     'DataStream', 'UserGeneratorDataStream',
@@ -408,7 +408,7 @@ class DataStream(object):
     def _minibatch_iterator(self) -> Generator[ArrayTuple, None, None]:
         raise NotImplementedError()
 
-    def get_arrays(self, max_batch: Optional[int] = None) -> ArrayTuple:
+    def get_arrays(self, max_batch: Optional[int] = None) -> Tuple[np.ndarray, ...]:
         """
         Collecting mini-batches into NumPy arrays.
 
@@ -461,18 +461,19 @@ class DataStream(object):
                 raise RuntimeError(
                     'empty data stream cannot be converted to arrays')
             try:
-                arrays_buf = [[arr] for arr in batch]
+                arrays_buf = [[to_number_or_numpy(arr)] for arr in batch]
                 batch_index = 1
                 while max_batch is None or batch_index < max_batch:
                     batch = next(g)
                     for i, arr in enumerate(batch):
-                        arrays_buf[i].append(arr)
+                        arrays_buf[i].append(to_number_or_numpy(arr))
                     batch_index += 1
                 if max_batch == 0:
-                    arrays_buf = [[arr[0][:0]] for arr in arrays_buf]
+                    arrays_buf = [[array_buf[0][:0]]
+                                  for array_buf in arrays_buf]
             except StopIteration:
                 pass
-            return tuple(np.concatenate(arr) for arr in arrays_buf)
+            return tuple(np.concatenate(array_buf) for array_buf in arrays_buf)
         finally:
             g.close()
 
