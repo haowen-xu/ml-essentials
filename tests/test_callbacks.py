@@ -753,7 +753,7 @@ class LoggerCallbackTestCase(unittest.TestCase):
         self.assertEqual(len(logs), 1)
         self.assertRegex(
             logs[-1],
-            r'^\s4/78 - 1:01 - acc: 0.5 - loss: 0.25 - val_acc: 0.75 \(\*\)\n$',
+            r'^\s4/78 - eta 1:01 - acc: 0.5 - loss: 0.25 - val_acc: 0.75 \(\*\)\n$',
         )
         self.assertEqual(remote_doc.logs, [
             ('update',
@@ -798,8 +798,7 @@ class LoggerCallbackTestCase(unittest.TestCase):
         self.assertEqual(len(logs), 1)
         self.assertRegex(
             logs[-1],
-            r'^\s4/78 - 1:01 - acc: 0.125 - loss: 0.25 - val_acc: 0.75 - '
-            r'epoch_time: 2.5s \(\*\)\n$',
+            r'^4 iters in 2.5s - eta 1:01 - acc: 0.125 - loss: 0.25 - val_acc: 0.75 \(\*\)\n$',
         )
         self.assertEqual(remote_doc.logs, [
             ('update',

@@ -583,10 +583,11 @@ class LoggerCallback(Callback):
         _print_log(self.console_writer, log_line, show_time=show_time)
         self.ctx.last_console_log_time = time.time()
 
-    def _batch_console_head(self) -> str:
+    def _batch_console_head(self, batch=None) -> str:
         # the batch counter
         max_batch = str(self.ctx.progress.get('max_batch', ''))
-        batch = str(self.ctx.progress.get('batch', ''))
+        if batch is None:
+            batch = str(self.ctx.progress.get('batch', ''))
         if max_batch:
             return f'{batch:>{len(max_batch)}s}/{max_batch}'
         return batch
@@ -690,21 +691,24 @@ class LoggerCallback(Callback):
 
         # write the console log
         if self._should_write_epoch_console_log():
-            log_prefix = self._batch_console_head()
+            # log_prefix: total number of executed batches + exc_time
+            batch = self.ctx.progress.get('batch', None)
+            log_prefix = f'{batch} iters'
+            if data.exc_time:
+                elapsed_str = format_duration(
+                    data.exc_time, precision=1, count_down=True)
+                log_prefix += f' in {elapsed_str}'
+
+            # eta
             eta = self.stage.get_eta()
             if eta is not None:
                 # just to be consistent with the format of batch logs
-                log_prefix += f' - {format_duration(eta, count_down=True)}'
-
-            log_suffix = ''
-            if data.exc_time:
-                log_suffix = f'epoch_time: ' \
-                             f'{format_duration(data.exc_time, precision=3)}'
+                log_prefix += f' - eta {format_duration(eta, count_down=True)}'
 
             self._write_stage_or_epoch_end_console_log(
                 result_dict=epoch_result,
                 prefix=log_prefix,
-                suffix=log_suffix,
+                suffix='',
             )
 
         # push to remote log
@@ -743,7 +747,7 @@ class LoggerCallback(Callback):
             if 'eta' in self.ctx.progress:
                 eta_str = format_duration(self.ctx.progress["eta"],
                                           count_down=True)
-                buf.append(eta_str)
+                buf.append(f'eta {eta_str}')
             if batch_result:
                 result_str = self.metrics_formatter.format(
                     batch_result,
