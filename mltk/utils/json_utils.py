@@ -30,7 +30,7 @@ def _json_convert(o: Any, no_dollar_field: bool = False) -> Any:
     elif isinstance(o, (np.float, np.float16, np.float32, np.float64)):
         o = float(o)
     elif isinstance(o, np.ndarray):
-        o = [_json_convert(v, no_dollar_field) for v in o.tolist()]
+        o = _json_convert(o.tolist(), no_dollar_field)
     else:
         o = o
 
@@ -61,6 +61,8 @@ def json_dumps(o: Any, *, separators: Tuple[str, str] = (',', ':'),
     >>> json_dumps([True, False])
     '[true,false]'
 
+    >>> json_dumps(np.array(np.nan))
+    '{"$numberDouble":"NaN"}'
     >>> json_dumps(np.concatenate([np.arange(5), [np.nan, np.inf, -np.inf]], axis=0))
     '[0.0,1.0,2.0,3.0,4.0,{"$numberDouble":"NaN"},{"$numberDouble":"Infinity"},{"$numberDouble":"-Infinity"}]'
     >>> json_dumps({'values': [np.float(0.1), np.int(2)]})
@@ -72,6 +74,8 @@ def json_dumps(o: Any, *, separators: Tuple[str, str] = (',', ':'),
     >>> json_dumps(ObjectId('5d04930e9dcf3fec04050251'))
     '{"$oid":"5d04930e9dcf3fec04050251"}'
 
+    >>> json_dumps(np.array(np.nan), no_dollar_field=True)
+    '"nan"'
     >>> json_dumps(
     ...     np.concatenate([np.arange(5), [np.nan, np.inf, -np.inf]], axis=0),
     ...     no_dollar_field=True
