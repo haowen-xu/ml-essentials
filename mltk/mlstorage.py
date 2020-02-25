@@ -105,7 +105,7 @@ class MLStorageClient(object):
         uri = f'{self.uri}/v1{endpoint}'
         if 'json' in kwargs:
             json_obj = kwargs.pop('json')
-            json_str = json_dumps(json_obj)
+            json_str = json_dumps(json_obj, no_dollar_field=True)
             kwargs['data'] = json_str
             kwargs.setdefault('headers', {})
             kwargs['headers']['Content-Type'] = 'application/json'

@@ -1088,7 +1088,7 @@ def save_config(config: Config, path: str, flatten: bool = True) -> None:
     # serialize the config dict by different serializers according to extension
     ext = os.path.splitext(path)[-1].lower()
     if ext == '.json':
-        cnt = json_dumps(cfg_dict)
+        cnt = json_dumps(cfg_dict, no_dollar_field=True)
     elif ext in ('.yml', '.yaml'):
         cnt = yaml.dump(cfg_dict, Dumper=yaml.SafeDumper)
     else:

@@ -184,7 +184,7 @@ class MLStorageClientTestCase(unittest.TestCase):
     def test_create_update_delete(self):
         object_id = str(ObjectId())
         doc_fields = {
-            'uuid': uuid.uuid4(),
+            'uuid': str(uuid.uuid4()),
             'name': 'hello',
             'storage_dir': f'/{object_id}',
         }

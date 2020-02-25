@@ -320,7 +320,7 @@ class Experiment(Generic[TConfig]):
                         obj = merge_updates_into_doc(old_obj, obj)
                 except Exception:  # pragma: no cover
                     raise IOError(f'Cannot load the existing JSON file: {path}')
-            obj_json = json_dumps(obj)
+            obj_json = json_dumps(obj, no_dollar_field=True)
             with codecs.open(path, 'wb', 'utf-8') as f:
                 f.write(obj_json)
 

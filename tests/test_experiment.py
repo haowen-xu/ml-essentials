@@ -5,6 +5,7 @@ import shutil
 import sys
 import time
 import unittest
+from contextlib import contextmanager
 from datetime import datetime
 from tempfile import TemporaryDirectory
 
@@ -26,61 +27,67 @@ class _YourConfig(Config):
         batch_size = 64
 
 
+@contextmanager
+def with_scoped_chdir():
+    old_cwd = os.path.abspath(os.getcwd())
+    try:
+        with TemporaryDirectory() as temp_dir:
+            os.chdir(temp_dir)
+            yield temp_dir
+    finally:
+        os.chdir(old_cwd)
+
+
 class ExperimentTestCase(unittest.TestCase):
 
     def test_construct(self):
         # test auto select script name and output dir
-        exp = Experiment(_YourConfig)
-        script_name = os.path.splitext(
-            os.path.basename(sys.modules['__main__'].__file__))[0]
-        self.assertEqual(exp.script_name, script_name)
-        self.assertEqual(
-            exp.output_dir, os.path.abspath(f'./results/{script_name}'))
-        self.assertIsNone(exp.id)
-        self.assertIsNone(exp.client)
-        self.assertIsInstance(exp.doc, ExperimentDoc)
-        self.assertIsNone(exp.doc.id)
-        self.assertIsNone(exp.doc.client)
+        with with_scoped_chdir():
+            exp = Experiment(_YourConfig, args=[])
+            script_name = os.path.splitext(
+                os.path.basename(sys.modules['__main__'].__file__))[0]
+            self.assertEqual(exp.script_name, script_name)
+            self.assertEqual(
+                exp.output_dir, os.path.abspath(f'./results/{script_name}'))
+            self.assertIsNone(exp.id)
+            self.assertIsNone(exp.client)
+            self.assertIsInstance(exp.doc, ExperimentDoc)
+            self.assertIsNone(exp.doc.id)
+            self.assertIsNone(exp.doc.client)
 
         # test select output dir according to mlrunner env
-        with TemporaryDirectory() as temp_dir:
+        with with_scoped_chdir() as temp_dir:
             with set_environ_context(MLSTORAGE_OUTPUT_DIR=temp_dir):
                 exp = Experiment(_YourConfig)
                 self.assertEqual(exp.output_dir, temp_dir)
 
         # test specifying script_name
-        old_cwd = os.getcwd()
-        try:
-            with TemporaryDirectory() as temp_dir:
-                os.chdir(temp_dir)
-                output_dir = os.path.abspath('./results/abc')
-                self.assertFalse(os.path.exists(output_dir))
+        with with_scoped_chdir():
+            output_dir = os.path.abspath('./results/abc')
+            self.assertFalse(os.path.exists(output_dir))
 
-                # first time to use the script name
+            # first time to use the script name
+            exp = Experiment(_YourConfig, script_name='abc', args=[])
+            self.assertEqual(exp.script_name, 'abc')
+            self.assertEqual(exp.output_dir, output_dir)
+            with exp:
+                self.assertTrue(os.path.exists(output_dir))
+
+            # second time to use the script name, deduplicate it with date
+            class FakeDateTime(object):
+                def now(self):
+                    return dt
+
+            dt = datetime.utcfromtimestamp(1576755571.662434)
+            dt_str = format_as_asctime(
+                dt,
+                datetime_format='%Y-%m-%d_%H-%M-%S',
+                datetime_msec_sep='_',
+            )
+            output_dir = os.path.abspath(f'./results/abc_{dt_str}')
+            with mock.patch('mltk.experiment.datetime', FakeDateTime()):
                 exp = Experiment(_YourConfig, script_name='abc', args=[])
-                self.assertEqual(exp.script_name, 'abc')
-                self.assertEqual(exp.output_dir, output_dir)
-                with exp:
-                    self.assertTrue(os.path.exists(output_dir))
-
-                # second time to use the script name, deduplicate it with date
-                class FakeDateTime(object):
-                    def now(self):
-                        return dt
-
-                dt = datetime.utcfromtimestamp(1576755571.662434)
-                dt_str = format_as_asctime(
-                    dt,
-                    datetime_format='%Y-%m-%d_%H-%M-%S',
-                    datetime_msec_sep='_',
-                )
-                output_dir = os.path.abspath(f'./results/abc_{dt_str}')
-                with mock.patch('mltk.experiment.datetime', FakeDateTime()):
-                    exp = Experiment(_YourConfig, script_name='abc', args=[])
-                self.assertEqual(exp.output_dir, output_dir)
-
-        finally:
-            os.chdir(old_cwd)
+            self.assertEqual(exp.output_dir, output_dir)
 
         # test specifying the output dir
         with TemporaryDirectory() as temp_dir:
@@ -88,37 +95,40 @@ class ExperimentTestCase(unittest.TestCase):
             self.assertEqual(exp.output_dir, temp_dir)
 
         # test config
-        self.assertIsInstance(Experiment(_YourConfig).config, _YourConfig)
-        config = _YourConfig()
-        self.assertIs(Experiment(config).config, config)
+        with with_scoped_chdir():
+            self.assertIsInstance(Experiment(_YourConfig).config, _YourConfig)
+            config = _YourConfig()
+            self.assertIs(Experiment(config).config, config)
 
-        with pytest.raises(TypeError,
-                           match='`config_or_cls` is neither a Config class, '
-                                 'nor a Config instance: <class \'object\'>'):
-            _ = Experiment(object)
+            with pytest.raises(TypeError,
+                               match='`config_or_cls` is neither a Config class, '
+                                     'nor a Config instance: <class \'object\'>'):
+                _ = Experiment(object)
 
-        with pytest.raises(TypeError,
-                           match='`config_or_cls` is neither a Config class, '
-                                 'nor a Config instance: <object .*>'):
-            _ = Experiment(object())
+            with pytest.raises(TypeError,
+                               match='`config_or_cls` is neither a Config class, '
+                                     'nor a Config instance: <object .*>'):
+                _ = Experiment(object())
 
         # test args
-        self.assertTupleEqual(Experiment(_YourConfig).args, tuple(sys.argv[1:]))
-        self.assertEqual(Experiment(_YourConfig, args=[]).args, ())
+        with with_scoped_chdir():
+            self.assertTupleEqual(Experiment(_YourConfig).args, tuple(sys.argv[1:]))
+            self.assertEqual(Experiment(_YourConfig, args=[]).args, ())
 
-        args = ('--output-dir=abc', '--max_epoch=123')
-        self.assertTupleEqual(Experiment(_YourConfig, args=args).args, args)
+            args = ('--output-dir=abc', '--max_epoch=123')
+            self.assertTupleEqual(Experiment(_YourConfig, args=args).args, args)
 
         # test specifying the environment variable of MLStorage server
-        exp_id = ObjectId()
-        with set_environ_context(MLSTORAGE_SERVER_URI='http://localhost:8080',
-                                 MLSTORAGE_EXPERIMENT_ID=str(exp_id)):
-            e = Experiment(_YourConfig)
-            self.assertEqual(e.id, exp_id)
-            self.assertIsInstance(e.client, MLStorageClient)
-            self.assertEqual(e.client.uri, 'http://localhost:8080')
-            self.assertEqual(e.doc.id, exp_id)
-            self.assertEqual(e.doc.client, e.client)
+        with with_scoped_chdir():
+            exp_id = ObjectId()
+            with set_environ_context(MLSTORAGE_SERVER_URI='http://localhost:8080',
+                                     MLSTORAGE_EXPERIMENT_ID=str(exp_id)):
+                e = Experiment(_YourConfig)
+                self.assertEqual(e.id, exp_id)
+                self.assertIsInstance(e.client, MLStorageClient)
+                self.assertEqual(e.client.uri, 'http://localhost:8080')
+                self.assertEqual(e.doc.id, exp_id)
+                self.assertEqual(e.doc.client, e.client)
 
     def test_events(self):
         with TemporaryDirectory() as temp_dir:
