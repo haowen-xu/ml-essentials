@@ -634,17 +634,15 @@ class LoggerCallback(Callback):
             # write the console log
             if self._should_write_start_end_console_log():
                 log_prefix = f'{self.stage.name.capitalize()} finished'
-                log_suffix = ''
                 if data.exc_time is not None:
-                    log_suffix = (
-                        f'{self.stage.type.metric_prefix}time: '
-                        f'{format_duration(data.exc_time, precision=3)}'
-                    )
+                    elapsed_str = format_duration(
+                        data.exc_time, precision=1, count_down=True)
+                    log_prefix += f' in {elapsed_str}'
 
                 self._write_stage_or_epoch_end_console_log(
                     result_dict=stage_result,
                     prefix=log_prefix,
-                    suffix=log_suffix,
+                    suffix='',
                     show_time=True,
                     is_stage_end=True,
                 )

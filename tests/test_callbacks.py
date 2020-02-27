@@ -850,8 +850,8 @@ class LoggerCallbackTestCase(unittest.TestCase):
         self.assertEqual(len(logs), 1)
         self.assertRegex(
             logs[-1],
-            r'^\[[^\[\]]+\] Train finished - acc: 0.875 - loss: 0.25 - '
-            r'val_acc: 0.75 - time: 9.5s\n$',
+            r'^\[[^\[\]]+\] Train finished in 9.5s - acc: 0.875 - loss: 0.25 - '
+            r'val_acc: 0.75\n$',
         )
         self.assertEqual(remote_doc.logs, [
             ('update', {
