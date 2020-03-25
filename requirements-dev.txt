@@ -1,7 +1,8 @@
 -r requirements.txt
 
 pytest
-coverage < 5.0
+pytest-cov
+#coverage < 5.0
 coveralls >= 1.11.1
 
 httpretty >= 0.9.6
