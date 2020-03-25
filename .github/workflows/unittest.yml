@@ -37,5 +37,7 @@ jobs:
           pytest --cov=mltk
           coveralls
         env:
-          COVERALLS_SERVICE_NAME: "Github Actions"
+          COVERALLS_SERVICE_NAME: github
           COVERALLS_REPO_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          COVERALLS_GIT_BRANCH: ${{ github.ref }}
+          COVERALLS_GIT_COMMIT: ${{ github.sha }}
