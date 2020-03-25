@@ -11,14 +11,17 @@ jobs:
         python-version: [3.6, 3.7, 3.8]
 
     steps:
+      - uses: actions/checkout@v2
+
       - name: Set up system dependencies
         run: |
           sudo apt-get update && sudo apt-get -y install unrar
-      - uses: actions/checkout@v2
+
       - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v1
         with:
           python-version: ${{ matrix.python-version }}
+
       - name: Install Python dependencies
         run: |
           python -m pip install --upgrade pip
@@ -27,7 +30,6 @@ jobs:
       - name: Print Python package versions
         run: |
           pytest --version
-          coverage --version
           coveralls --version
 
       - name: Test with pytest
