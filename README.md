@@ -1,6 +1,6 @@
 # ML Essentials
 
-[![](https://api.travis-ci.org/haowen-xu/ml-essentials.svg?branch=master)](https://travis-ci.org/haowen-xu/ml-essentials)
+[![](https://github.com/haowen-xu/ml-essentials/workflows/UnitTest/badge.svg?branch=master)](https://github.com/haowen-xu/ml-essentials/actions)
 [![](https://coveralls.io/repos/github/haowen-xu/ml-essentials/badge.svg?branch=master)](https://coveralls.io/github/haowen-xu/ml-essentials?branch=master)
 
 A set of essential toolkits for daily machine learning experiments.
