@@ -34,10 +34,8 @@ jobs:
           export LOCAL_TEST=$(if [ "${{ github.ref }}" != "master" ]; then echo "1"; else echo "0"; fi)
           echo BRANCH="${{ github.ref }}"
           echo LOCAL_TEST="${LOCAL_TEST}"
-          coverage run -m pytest
-
-      - name: Submit coverage report to coveralls.io
-        run: coveralls
+          pytest --cov=mltk
+          coveralls
         env:
           COVERALLS_SERVICE_NAME: "Github Actions"
           COVERALLS_REPO_TOKEN: ${{ secrets.GITHUB_TOKEN }}
