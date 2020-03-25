@@ -1,8 +1,8 @@
 -r requirements.txt
 
-coveralls == 1.9.2
-coverage < 5.0
-PyTest == 5.3.1
+coveralls
+coverage
+PyTest
 httpretty >= 0.9.6
 mock >= 2.0.0
 rarfile >= 3.0
