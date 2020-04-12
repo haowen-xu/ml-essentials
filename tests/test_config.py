@@ -430,6 +430,27 @@ class ConfigLoaderTestCase(unittest.TestCase):
                                match='Unsupported config file extension: .txt'):
                 _ = loader.load_file(txt_file)
 
+    def test_yaml_include(self):
+        with TemporaryDirectory() as temp_dir:
+            yaml_file = os.path.join(temp_dir, 'value.yaml')
+            with codecs.open(yaml_file, 'wb', 'utf-8') as f:
+                f.write('a: 1\nnested.b: 2\n')
+
+            yaml_file2 = os.path.join(temp_dir, 'test.yaml')
+            with codecs.open(yaml_file2, 'wb', 'utf-8') as f:
+                f.write('!include "value.yaml"')
+
+            # test load with include
+            expected = Config(a=1, nested=Config(b=2))
+            loader = ConfigLoader(Config)
+            loader.load_yaml(yaml_file2)
+            self.assertEqual(loader.get(), expected)
+
+            # test load without include
+            loader = ConfigLoader(Config, use_include=False)
+            with pytest.raises(Exception, match=r'!include'):
+                loader.load_yaml(yaml_file2)
+
     def test_parse_args(self):
         class MyConfig(Config):
             a = 123

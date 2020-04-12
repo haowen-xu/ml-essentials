@@ -664,7 +664,11 @@ class ConfigLoader(Generic[TConfig]):
     A class to help load config attributes from multiple sources.
     """
 
-    def __init__(self, config_or_cls: Union[Type[TConfig], TConfig]):
+    use_include: bool
+    """Whether or not to support '!include' directive in YAML files?"""
+
+    def __init__(self, config_or_cls: Union[Type[TConfig], TConfig],
+                 use_include: bool = True):
         """
         Construct a new :class:`ConfigLoader`.
 
@@ -685,6 +689,7 @@ class ConfigLoader(Generic[TConfig]):
         self._config_cls = config_cls
         self._config_type_info = type_info(config_cls)
         self._config = config
+        self.use_include = use_include
 
     @property
     def config_cls(self) -> Type[TConfig]:
@@ -842,14 +847,19 @@ class ConfigLoader(Generic[TConfig]):
             self.load_object(obj)
 
     def load_yaml(self, path: Union[str, bytes, os.PathLike],
-                  Loader=yaml.SafeLoader):
+                  Loader=NOT_SET):
         """
         Load config from a YAML file.
 
         Args:
             path: Path of the YAML file.
-            Loader: The YAML loader class.
+            Loader: The YAML loader class.  If not specified, will use
+                :class:`tensorkit.utils.YAMLIncludeLoader`
+                if `self.use_include` is True, or `yaml.SafeLoader` otherwise.
         """
+        if Loader is NOT_SET:
+            Loader = YAMLIncludeLoader if self.use_include else yaml.SafeLoader
+
         with codecs.open(path, 'rb', 'utf-8') as f:
             obj = yaml.load(f, Loader=Loader)
             if obj is not None:
@@ -928,15 +938,15 @@ class ConfigLoader(Generic[TConfig]):
                 path = values
                 ext = os.path.splitext(path)[-1].lower()
                 if ext == '.json':
-                    loader = json_loads
+                    loader = lambda f: json.loads(f.read())
                 elif ext in ('.yaml', '.yml'):
-                    loader = partial(yaml.load, Loader=yaml.SafeLoader)
+                    loader = lambda f: yaml.load(f, Loader=yaml.SafeLoader)
                 else:
                     raise IOError(f'Cannot load config file {path!r}: '
                                   f'unsupported file extension.')
 
                 with codecs.open(values, 'rb', 'utf-8') as f:
-                    obj = loader(f.read())
+                    obj = loader(f)
                     if not isinstance(obj, dict):
                         raise ValueError(
                             f'Expected an object from config file {path!r}, '
