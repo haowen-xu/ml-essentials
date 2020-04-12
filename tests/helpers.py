@@ -1,9 +1,12 @@
 import os
 import stat
+import time
 import unittest
 import zipfile
 from contextlib import contextmanager
 from typing import *
+
+from httpretty import httpretty
 
 from mltk.callbacks import CallbackData
 from mltk.utils import NOT_SET
@@ -12,7 +15,7 @@ __all__ = [
     'slow_test', 'remote_test', 'pytorch_test',
     'get_file_content', 'write_file_content', 'dir_snapshot',
     'prepare_dir', 'zip_snapshot', 'chdir_context', 'set_environ_context',
-    'compute_fs_size_and_inode', 'new_callback_data',
+    'compute_fs_size_and_inode', 'new_callback_data', 'httpretty_register_uri',
 ]
 
 FAST = os.environ.get('FAST_TEST', '0') == '1'
@@ -155,3 +158,8 @@ def new_callback_data(**kwargs):
     for field in CallbackData.__slots__:
         kwargs.setdefault(field, None)
     return CallbackData(**kwargs)
+
+
+def httpretty_register_uri(*args, **kwargs):
+    httpretty.register_uri(*args, **kwargs)
+    time.sleep(0.01)

@@ -30,7 +30,7 @@ class MLStorageClientTestCase(unittest.TestCase):
         self.assertEqual(c.uri, 'http://127.0.0.1')
 
         # test invalid response should trigger error
-        httpretty.register_uri(
+        httpretty_register_uri(
             httpretty.POST, 'http://127.0.0.1/v1/_query', body='hello')
         with pytest.raises(IOError,
                            match=r'The response from http://127.0.0.1/v1/'
@@ -64,7 +64,7 @@ class MLStorageClientTestCase(unittest.TestCase):
         ]
 
         # test bare query
-        httpretty.register_uri(
+        httpretty_register_uri(
             httpretty.POST,
             'http://127.0.0.1/v1/_query',
             body=partial(
@@ -83,7 +83,7 @@ class MLStorageClientTestCase(unittest.TestCase):
             _ = self.client.get_storage_dir(object_ids[2])
 
         # test query
-        httpretty.register_uri(
+        httpretty_register_uri(
             httpretty.POST,
             'http://127.0.0.1/v1/_query',
             body=partial(
@@ -109,7 +109,7 @@ class MLStorageClientTestCase(unittest.TestCase):
             response_headers['content-type'] = 'application/json; charset=utf-8'
             return [200, response_headers, json_dumps(doc)]
 
-        httpretty.register_uri(
+        httpretty_register_uri(
             httpretty.GET, f'http://127.0.0.1/v1/_get/{object_id}',
             body=callback
         )
@@ -129,7 +129,7 @@ class MLStorageClientTestCase(unittest.TestCase):
 
         heartbeat_received = [False]
         object_id = str(ObjectId())
-        httpretty.register_uri(
+        httpretty_register_uri(
             httpretty.POST, f'http://127.0.0.1/v1/_heartbeat/{object_id}',
             body=callback
         )
@@ -152,7 +152,7 @@ class MLStorageClientTestCase(unittest.TestCase):
             o.update(doc_fields)
             return [200, response_headers, json_dumps(o)]
 
-        httpretty.register_uri(
+        httpretty_register_uri(
             httpretty.GET, f'http://127.0.0.1/v1/_get/{object_id}',
             body=callback
         )
@@ -171,7 +171,7 @@ class MLStorageClientTestCase(unittest.TestCase):
             response_headers['content-type'] = 'application/json; charset=utf-8'
             return [200, response_headers, json_dumps(o)]
 
-        httpretty.register_uri(
+        httpretty_register_uri(
             httpretty.POST, f'http://127.0.0.1/v1/_update/{object_id}',
             body=callback
         )
@@ -200,7 +200,7 @@ class MLStorageClientTestCase(unittest.TestCase):
             response_headers['content-type'] = 'application/json; charset=utf-8'
             return [200, response_headers, json_dumps(o)]
 
-        httpretty.register_uri(
+        httpretty_register_uri(
             httpretty.POST, f'http://127.0.0.1/v1/_create',
             body=callback
         )
@@ -226,7 +226,7 @@ class MLStorageClientTestCase(unittest.TestCase):
             response_headers['content-type'] = 'application/json; charset=utf-8'
             return [200, response_headers, json_dumps(o)]
 
-        httpretty.register_uri(
+        httpretty_register_uri(
             httpretty.POST, f'http://127.0.0.1/v1/_update/{object_id}',
             body=callback
         )
@@ -245,7 +245,7 @@ class MLStorageClientTestCase(unittest.TestCase):
             response_headers['content-type'] = 'application/json; charset=utf-8'
             return [200, response_headers, json_dumps([object_id])]
 
-        httpretty.register_uri(
+        httpretty_register_uri(
             httpretty.POST, f'http://127.0.0.1/v1/_delete/{object_id}',
             body=callback
         )
@@ -274,7 +274,7 @@ class MLStorageClientTestCase(unittest.TestCase):
             response_headers['content-type'] = 'application/json; charset=utf-8'
             return [200, response_headers, json_dumps(doc_fields)]
 
-        httpretty.register_uri(
+        httpretty_register_uri(
             httpretty.POST, f'http://127.0.0.1/v1/_set_finished/{object_id}',
             body=callback
         )
@@ -291,7 +291,7 @@ class MLStorageClientTestCase(unittest.TestCase):
             response_headers['content-type'] = 'application/json; charset=utf-8'
             return [200, response_headers, json_dumps(doc_fields)]
 
-        httpretty.register_uri(
+        httpretty_register_uri(
             httpretty.POST, f'http://127.0.0.1/v1/_set_finished/{object_id}',
             body=callback
         )
@@ -312,7 +312,7 @@ class MLStorageClientTestCase(unittest.TestCase):
             return [200, response_headers, json_dumps(doc_fields)]
 
         counter = [0]
-        httpretty.register_uri(
+        httpretty_register_uri(
             httpretty.GET, f'http://127.0.0.1/v1/_get/{object_id}',
             body=callback
         )
@@ -328,7 +328,7 @@ class MLStorageClientTestCase(unittest.TestCase):
     def test_get_file(self):
         object_id = str(ObjectId())
 
-        httpretty.register_uri(
+        httpretty_register_uri(
             httpretty.GET,
             f'http://127.0.0.1/v1/_getfile/{object_id}/hello.txt',
             body=b'hello, world'

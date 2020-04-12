@@ -251,27 +251,27 @@ class MockMLServer(object):
         return self._db
 
     def register_uri(self):
-        httpretty.register_uri(
+        httpretty_register_uri(
             'GET',
             re.compile(self.uri + '/v1/_get/([A-Za-z0-9]+)'),
             self.handle_get
         )
-        httpretty.register_uri(
+        httpretty_register_uri(
             'POST',
             re.compile(self.uri + '/v1/_heartbeat/([A-Za-z0-9]+)'),
             self.handle_heartbeat
         )
-        httpretty.register_uri(
+        httpretty_register_uri(
             'POST',
             re.compile(self.uri + '/v1/_create'),
             self.handle_create
         )
-        httpretty.register_uri(
+        httpretty_register_uri(
             'POST',
             re.compile(self.uri + '/v1/_update/([A-Za-z0-9]+)'),
             self.handle_update
         )
-        httpretty.register_uri(
+        httpretty_register_uri(
             'POST',
             re.compile(self.uri + '/v1/_set_finished/([A-Za-z0-9]+)'),
             self.handle_set_finished
