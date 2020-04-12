@@ -40,7 +40,7 @@ class MLStorageClientTestCase(unittest.TestCase):
             _ = self.client.query()
 
     @httpretty.activate
-    def test_query(self):
+    def test_bare_query(self):
         def callback(request, uri, response_headers,
                      expected_body, expected_skip, expected_limit,
                      expected_sort, response_body):
@@ -82,6 +82,31 @@ class MLStorageClientTestCase(unittest.TestCase):
 
         with pytest.raises(requests.exceptions.ConnectionError):
             _ = self.client.get_storage_dir(object_ids[2])
+
+    @httpretty.activate
+    def test_query(self):
+        def callback(request, uri, response_headers,
+                     expected_body, expected_skip, expected_limit,
+                     expected_sort, response_body):
+            content_type = request.headers.get('Content-Type').split(';', 1)[0]
+            self.assertEqual(content_type, 'application/json')
+            self.assertEqual(request.querystring['skip'][0], str(expected_skip))
+            if expected_limit is not None:
+                self.assertEqual(
+                    request.querystring['limit'][0], str(expected_limit))
+            if expected_sort is not None:
+                self.assertEqual(
+                    request.querystring['sort'][0], str(expected_sort))
+            self.assertEqual(request.body, expected_body)
+            response_headers['content-type'] = 'application/json; charset=utf-8'
+            return [200, response_headers, response_body]
+
+        object_ids = [str(ObjectId()) for _ in range(5)]
+        docs = [
+            {'_id': object_ids[i], 'storage_dir': f'/{object_ids[i]}',
+             'uuid': uuid.uuid4()}
+            for i in range(len(object_ids))
+        ]
 
         # test query
         httpretty_register_uri(
