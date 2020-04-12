@@ -111,17 +111,20 @@ class MLStorageClient(object):
             kwargs['headers']['Content-Type'] = 'application/json'
 
         resp = requests.request(method, uri, **kwargs)
-        resp.raise_for_status()
+        try:
+            resp.raise_for_status()
+            cnt = resp.content
+            if decode_json:
+                content_type = resp.headers.get('content-type') or ''
+                content_type = content_type.split(';', 1)[0]
+                if content_type != 'application/json':
+                    raise IOError(f'The response from {uri} is not JSON: '
+                                  f'HTTP code is {resp.status_code}')
+                cnt = json_loads(cnt)
+        finally:
+            resp.close()
 
-        if decode_json:
-            content_type = resp.headers.get('content-type') or ''
-            content_type = content_type.split(';', 1)[0]
-            if content_type != 'application/json':
-                raise IOError(f'The response from {uri} is not JSON: '
-                              f'HTTP code is {resp.status_code}')
-            resp = json_loads(resp.content)
-
-        return resp
+        return cnt
 
     def query(self,
               filter: Optional[FilterType] = None,
@@ -292,7 +295,7 @@ class MLStorageClient(object):
         id = str(id)
         path = normalize_relpath(path)
         return self.do_request(
-            'GET', f'/_getfile/{id}/{path}', decode_json=False).content
+            'GET', f'/_getfile/{id}/{path}', decode_json=False)
 
 
 class ExperimentDoc(RemoteDoc):
