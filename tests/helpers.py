@@ -1,6 +1,5 @@
 import os
 import stat
-import time
 import unittest
 import zipfile
 from contextlib import contextmanager
@@ -162,4 +161,3 @@ def new_callback_data(**kwargs):
 
 def httpretty_register_uri(*args, **kwargs):
     httpretty.register_uri(*args, **kwargs)
-    time.sleep(0.1)

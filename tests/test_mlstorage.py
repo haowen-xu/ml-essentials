@@ -93,6 +93,7 @@ class MLStorageClientTestCase(unittest.TestCase):
                 response_body=json_dumps(docs[2:4])
             )
         )
+        time.sleep(1)
         ret = self.client.query(filter={'name': 'hint'}, sort='-start_time',
                                 skip=1, limit=99)
         self.assertListEqual(ret, docs[2:4])
