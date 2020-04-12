@@ -162,4 +162,4 @@ def new_callback_data(**kwargs):
 
 def httpretty_register_uri(*args, **kwargs):
     httpretty.register_uri(*args, **kwargs)
-    time.sleep(0.01)
+    time.sleep(0.1)
