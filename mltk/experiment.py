@@ -95,7 +95,7 @@ class Experiment(Generic[TConfig]):
                  *,
                  script_name: str = NOT_SET,
                  output_dir: Optional[str] = NOT_SET,
-                 args: Sequence[str] = NOT_SET,
+                 args: Optional[Sequence[str]] = NOT_SET,
                  auto_load_config: bool = True,
                  auto_save_config: bool = True,
                  discard_undefind_config_fields: Union[str, DiscardMode] = DiscardMode.WARN,
@@ -168,7 +168,8 @@ class Experiment(Generic[TConfig]):
 
         if args is NOT_SET:
             args = sys.argv[1:]
-        args = tuple(map(str, args))
+        if args is not None:
+            args = tuple(map(str, args))
 
         # memorize the arguments
         self._config = config

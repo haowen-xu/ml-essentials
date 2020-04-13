@@ -400,3 +400,11 @@ class ExperimentTestCase(unittest.TestCase):
                 json_loads(get_file_content(result_json_path)),
                 {'loss': 1, 'acc': 2, 'abc': 123}
             )
+
+    def test_no_load_args(self):
+        with with_scoped_chdir():
+            config = _YourConfig(max_epoch=123)
+            exp = Experiment(config, args=None)
+            with exp:
+                self.assertIs(exp.config, config)
+                self.assertEqual(exp.config, _YourConfig(max_epoch=123))
