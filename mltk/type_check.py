@@ -26,7 +26,7 @@ __all__ = [
     # various type info classes
     'AnyTypeInfo',
     'IntTypeInfo', 'FloatTypeInfo', 'BoolTypeInfo', 'StrTypeInfo',
-    'BytesTypeInfo', 'PatternTypeInfo', 'PathTypeInfo',
+    'BytesTypeInfo', 'PatternTypeInfo', 'PathTypeInfo', 'NDArrayTypeInfo',
     'NoneTypeInfo', 'EnumTypeInfo', 'OptionalTypeInfo', 'UnionTypeInfo',
     'ListTypeInfo', 'TupleTypeInfo',
     'VardicTupleTypeInfo', 'DictTypeInfo',
@@ -254,6 +254,8 @@ def type_info(type_) -> 'TypeInfo':
             return PatternTypeInfo()
         elif issubclass(type_, Path):
             return PathTypeInfo()
+        elif issubclass(type_, np.ndarray):
+            return NDArrayTypeInfo()
         elif is_dataclass(type_):
             type_fields = getattr(type_, dataclasses._FIELDS)
             fields = {}
@@ -632,6 +634,41 @@ class PathTypeInfo(PrimitiveTypeInfo[Path]):
 
     def __str__(self):
         return 'Path'
+
+
+class NDArrayTypeInfo(TypeInfo[np.ndarray]):
+    """
+    Type information of ``numpy.ndarray``.
+
+    >>> t = type_info(np.ndarray)
+    >>> t
+    <TypeInfo(numpy.ndarray)>
+    >>> t.check_value(1.)
+    array(1.)
+    >>> t.check_value([1, 2, 3])
+    array([1, 2, 3])
+    >>> t.parse_string('[1, 2, 3]')
+    array([1, 2, 3])
+    """
+
+    def _check_value(self, o: Any, context: TypeCheckContext) -> np.ndarray:
+        if not context.strict:
+            if not isinstance(o, np.ndarray):
+                o = np.asarray(o)
+        if not isinstance(o, np.ndarray):
+            context.raise_error('value is not a numpy array')
+        if not context.inplace:
+            o = np.copy(o)
+        return o
+
+    def __str__(self):
+        return 'numpy.ndarray'
+
+    def __eq__(self, other):
+        return isinstance(other, self.__class__)
+
+    def __hash__(self):
+        return hash(self.__class__)
 
 
 class NoneTypeInfo(TypeInfo[None], Singleton):

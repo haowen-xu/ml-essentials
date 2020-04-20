@@ -3,13 +3,13 @@ import os
 import re
 import unittest
 import warnings
-
 from dataclasses import dataclass, field
 from enum import Enum
 from functools import partial
 from pathlib import Path
 from typing import *
 
+import numpy as np
 import pytest
 
 from mltk import Config
@@ -226,6 +226,9 @@ class TypeInfoTestCase(unittest.TestCase):
         assert_equal(type_info_from_value(re.compile('.*')), PatternTypeInfo())
         assert_equal(type_info(Path), PathTypeInfo())
 
+        # np.ndarray
+        assert_equal(type_info(np.ndarray), NDArrayTypeInfo())
+
         # enum
         class MyEnum(str, Enum):
             A = 'A'
@@ -356,19 +359,22 @@ class TypeInfoTestCase(unittest.TestCase):
             self.assertIs(type_info(t), type_info(t))
 
     def _check_cast(self, ti, expected, strict_inputs, loose_inputs,
-                    error_inputs=()):
+                    error_inputs=(), assert_eq=None):
+        if assert_eq is None:
+            assert_eq = self.assertEqual
+
         for input_ in strict_inputs:
-            self.assertEqual(
+            assert_eq(
                 ti.check_value(input_, TypeCheckContext(strict=False)),
                 expected
             )
-            self.assertEqual(
+            assert_eq(
                 ti.check_value(input_, TypeCheckContext(strict=True)),
                 expected
             )
 
         for input_ in loose_inputs:
-            self.assertEqual(
+            assert_eq(
                 ti.check_value(input_, TypeCheckContext(strict=False)),
                 expected
             )
@@ -470,6 +476,26 @@ class TypeInfoTestCase(unittest.TestCase):
         # test inplace = False
         path = Path('.')
         self.assertIsNot(ti.check_value(path), path)
+
+    def test_ndarray(self):
+        ti = type_info(np.ndarray)
+        self.assertEqual(str(ti), 'numpy.ndarray')
+        self._check_cast(
+            ti, np.array([1, 2, 3]), [np.array([1, 2, 3])], [[1, 2, 3], (1, 2, 3)],
+            [], assert_eq=np.testing.assert_equal
+        )
+
+        # test parse_string
+        arr2 = ti.parse_string('[1, 2, 3]')
+        self.assertIsInstance(arr2, np.ndarray)
+        np.testing.assert_equal(arr2, [1, 2, 3])
+
+        # test inplace = False
+        arr = np.array([1, 2, 3])
+        arr2 = ti.check_value(arr)
+        self.assertIsNot(arr2, arr)
+        arr[:] = 0
+        np.testing.assert_equal(arr2, [1, 2, 3])
 
     def test_none(self):
         ti = type_info(None)
