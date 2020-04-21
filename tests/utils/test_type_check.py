@@ -1,5 +1,8 @@
+import base64
 import copy
+import gzip
 import os
+import pickle as pkl
 import re
 import unittest
 import warnings
@@ -478,11 +481,17 @@ class TypeInfoTestCase(unittest.TestCase):
         self.assertIsNot(ti.check_value(path), path)
 
     def test_ndarray(self):
+        serialized_array = base64.b64encode(
+            gzip.compress(pkl.dumps(np.array([1, 2, 3])))).decode('utf-8')
+
         ti = type_info(np.ndarray)
         self.assertEqual(str(ti), 'numpy.ndarray')
         self._check_cast(
-            ti, np.array([1, 2, 3]), [np.array([1, 2, 3])], [[1, 2, 3], (1, 2, 3)],
-            [], assert_eq=np.testing.assert_equal
+            ti, np.array([1, 2, 3]),
+            [np.array([1, 2, 3])],
+            [[1, 2, 3], (1, 2, 3), f'pickle:{serialized_array}'],
+            [],
+            assert_eq=np.testing.assert_equal
         )
 
         # test parse_string

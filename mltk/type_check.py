@@ -1,7 +1,11 @@
+import base64
 import copy
+import gzip
+
 import dataclasses
 import inspect
 import os
+import pickle as pkl
 import re
 import warnings
 from contextlib import contextmanager
@@ -653,6 +657,8 @@ class NDArrayTypeInfo(TypeInfo[np.ndarray]):
 
     def _check_value(self, o: Any, context: TypeCheckContext) -> np.ndarray:
         if not context.strict:
+            if isinstance(o, str) and o.startswith('pickle:'):
+                o = pkl.loads(gzip.decompress(base64.b64decode(o[7:])))
             if not isinstance(o, np.ndarray):
                 o = np.asarray(o)
         if not isinstance(o, np.ndarray):
