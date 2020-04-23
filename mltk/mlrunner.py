@@ -89,12 +89,14 @@ class MLRunnerConfig(Config):
         src_dir: str = '.'
         dst_dir: str = ''
         includes: List[PatternType] = [
-            re.compile(r'.*\.(py|pl|rb|js|sh|r|bat|cmd|exe|jar)$')
+            re.compile(r'.*\.(py|pl|rb|js|sh|r|bat|cmd|exe|jar|'
+                       r'yml|yaml|json|ini|cfg|conf)$')
         ]
         excludes: List[PatternType] = [
             re.compile(
-                r'.*[\\/](node_modules|\.svn|\.cvs|\.idea|'
-                r'\.DS_Store|\.git|\.hg|\.pytest_cache|__pycache__)'
+                r'.*[\\/](node_modules|\.svn|\.cvs|\.git|\.hg|'
+                r'\.idea|\.vscode|'
+                r'\.DS_Store|\.pytest_cache|__pycache__)'
                 r'(?:$|[\\/].*)'
             )
         ]
