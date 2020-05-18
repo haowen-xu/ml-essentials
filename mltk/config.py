@@ -721,7 +721,8 @@ class ConfigLoader(Generic[TConfig]):
             )
         )
 
-    def load_object(self, key_values: Union[Mapping, Config]):
+    def load_object(self, key_values: Union[Mapping, Config],
+                    include_root: str = '.'):
         """
         Load config attributes from the specified `key_values` object.
 
@@ -765,6 +766,8 @@ class ConfigLoader(Generic[TConfig]):
 
         Args:
             key_values: The dict or config object.
+            include_root: Root directory, where to resolve "$includes" list.
+                Take effect only if `self.use_include` is True.
         """
         if not isinstance(key_values, (Mapping, Config)):
             raise TypeError(f'`key_values` must be a dict or a Config object: '

@@ -1,6 +1,7 @@
 import json
 import math
 from datetime import datetime
+from enum import Enum
 from typing import Any, Tuple
 from uuid import UUID
 
@@ -19,15 +20,19 @@ def _json_convert(o: Any, no_dollar_field: bool = False) -> Any:
         # special fix: bool is subclass of int, we do not want to convert True
         # to 1, so we need to fix it.
         o = o
+    elif isinstance(o, Enum):
+        o = _json_convert(o.value, no_dollar_field)
     elif hasattr(o, 'items'):
         o = SON((k, _json_convert(v, no_dollar_field)) for k, v in o.items())
     elif hasattr(o, '__iter__') and not isinstance(o, (str, bytes, np.ndarray)):
         o = [_json_convert(v, no_dollar_field) for v in o]
-    elif isinstance(o, (np.integer, np.int, np.uint,
+    elif isinstance(o, str):
+        o = str(o)
+    elif isinstance(o, (int, np.integer, np.int, np.uint,
                         np.int8, np.int16, np.int32, np.int64,
                         np.uint8, np.uint16, np.uint32, np.uint64)):
         o = int(o)
-    elif isinstance(o, (np.float, np.float16, np.float32, np.float64)):
+    elif isinstance(o, (float, np.float, np.float16, np.float32, np.float64)):
         o = float(o)
     elif isinstance(o, np.ndarray):
         o = _json_convert(o.tolist(), no_dollar_field)
@@ -87,6 +92,11 @@ def json_dumps(o: Any, *, separators: Tuple[str, str] = (',', ':'),
     '"b8429bf5a9c544efa8a3f954e8aff204"'
     >>> json_dumps(ObjectId('5d04930e9dcf3fec04050251'), no_dollar_field=True)
     '"5d04930e9dcf3fec04050251"'
+
+    >>> class MyEnum(str, Enum):
+    ...     A = 'a'
+    >>> json_dumps(MyEnum('a'))
+    '"a"'
 
     Args:
         o: The object to be serialized.

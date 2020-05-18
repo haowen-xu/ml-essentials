@@ -10,7 +10,7 @@ import yaml
 from mltk.utils import *
 
 
-class DeprecatedArgTestCase(unittest.TestCase):
+class YAMLUtilsTestCase(unittest.TestCase):
 
     def test_include_loader(self):
         with TemporaryDirectory() as temp_dir:
