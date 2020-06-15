@@ -5,7 +5,7 @@ import sys
 import types
 from contextlib import contextmanager
 from logging import getLogger
-from threading import Thread
+from threading import Thread, Semaphore
 from typing import *
 
 __all__ = ['timed_wait_proc', 'exec_proc']
@@ -134,10 +134,16 @@ def exec_proc(args: Union[str, Iterable[str]],
             action(buf)
 
     def make_reader_thread(fd, action):
-        th = Thread(target=reader_func, args=(fd, action))
-        th.daemon = True
-        th.start()
-        return th
+        try:
+            th = Thread(target=reader_func, args=(fd, action))
+            th.daemon = True
+            th.start()
+            return th
+        finally:
+            reader_sem.release()
+
+    reader_sem = Semaphore()
+    expected_sem_target = int(on_stdout is not None) + int(on_stderr is not None)
 
     # internal flags
     stopped = [False]
@@ -168,6 +174,9 @@ def exec_proc(args: Union[str, Iterable[str]],
         if on_stderr is not None:
             stderr_thread = make_reader_thread(proc.stderr.fileno(), on_stderr)
 
+        for i in range(expected_sem_target):
+            reader_sem.acquire()
+
         try:
             yield proc
         except KeyboardInterrupt:  # pragma: no cover
@@ -182,7 +191,16 @@ def exec_proc(args: Union[str, Iterable[str]],
         if proc.poll() is None:
             proc.kill()
 
-        # Wait for the reader threads to exit
+        # gracefully stop the reader without setting `stopped = True` for
+        # a couple of time, so as to ensure the remaining content are read out.
+        for th in (stdout_thread, stderr_thread):
+            if th is not None:
+                try:
+                    th.join(3000)
+                except TimeoutError:
+                    pass
+
+        # Force setting the stopped flag, and wait for the reader threads to exit.
         stopped[0] = True
         for th in (stdout_thread, stderr_thread):
             if th is not None:

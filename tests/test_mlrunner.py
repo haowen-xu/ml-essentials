@@ -1065,7 +1065,7 @@ class ProgramHostTestCase(unittest.TestCase):
             host.kill()
             _ = proc.wait()
             # self.assertNotEqual(code, 0)
-            self.assertLess(abs(stop_time - start_time), 0.05)
+            self.assertLess(abs(stop_time - start_time), 0.1)  # that is, 20% difference of time
 
             # test kill by SIGKILL
             log_file = os.path.join(temp_dir, 'console.log')
