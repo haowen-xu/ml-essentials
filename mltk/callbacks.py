@@ -1072,6 +1072,12 @@ class EarlyStopping(BaseCheckpointCallback):
     smaller_is_better: bool
     """Whether or not smaller values of the metrics indicates better models?"""
 
+    update_at_equal_metric: bool
+    """
+    Whether or not to update the recorded parameters when encountering the
+    same validation metric as the best ever recorded parameters?
+    """
+
     max_no_improvement_epochs: Optional[int]
     """
     The maximum number of epochs to run when there is no improvement in the
@@ -1114,6 +1120,7 @@ class EarlyStopping(BaseCheckpointCallback):
                  root_dir: str,
                  metric_name: str,
                  smaller_is_better: bool = True,
+                 update_at_equal_metric: bool = True,
                  max_no_improvement_epochs: Optional[int] = None,
                  max_no_improvement_batches: Optional[int] = None,
                  restore_on_error: bool = False,
@@ -1128,6 +1135,9 @@ class EarlyStopping(BaseCheckpointCallback):
             metric_name: Name of the validation metric.
             smaller_is_better: Whether or not smaller values of the metrics
                 indicates better models?
+            update_at_equal_metric: Whether or not to update the recorded
+                parameters when encountering the same validation metric
+                as the best ever recorded parameters?
             max_no_improvement_epochs: The maximum number of epochs to run
                 when there is no improvement in the validation metric.
             max_no_improvement_batches: The maximum number of batches to run
@@ -1156,15 +1166,24 @@ class EarlyStopping(BaseCheckpointCallback):
 
         self.metric_name = metric_name
         self.smaller_is_better = smaller_is_better
+        self.update_at_equal_metric = update_at_equal_metric
         self.max_no_improvement_epochs = max_no_improvement_epochs
         self.max_no_improvement_batches = max_no_improvement_batches
         self.restore_on_error = restore_on_error
 
         self._metric_stats = ScalarMetricCollector()
+
         if smaller_is_better:
-            self._is_metric_better = lambda new, old: old is None or new < old
+            self._is_metric_better = lambda new, old: \
+                old is None or new < old
         else:
-            self._is_metric_better = lambda new, old: old is None or new > old
+            self._is_metric_better = lambda new, old: \
+                old is None or new > old
+
+        if self.update_at_equal_metric:
+            def wrap_accept_equal(fn):
+                return lambda new, old: fn(new, old) or (new == old)
+            self._is_metric_better = wrap_accept_equal(self._is_metric_better)
 
     def _need_termination(self):
         return (

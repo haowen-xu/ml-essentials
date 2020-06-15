@@ -1237,10 +1237,12 @@ class CheckpointCallbackTestCase(unittest.TestCase):
             self.assertEqual(cb.root_dir, root_dir)
             self.assertEqual(cb.metric_name, 'val_loss')
             self.assertTrue(cb.smaller_is_better)
+            self.assertTrue(cb.update_at_equal_metric)
             self.assertIsNone(cb.max_no_improvement_epochs)
             self.assertIsNone(cb.max_no_improvement_batches)
             self.assertFalse(cb.restore_on_error)
             self.assertTrue(cb._is_metric_better(1.0, 2.0))
+            self.assertTrue(cb._is_metric_better(1.0, 1.0))
             self.assertEqual(cb.max_checkpoints_to_keep, 1)
             self.assertFalse(cb.save_stage_state)
 
@@ -1259,6 +1261,7 @@ class CheckpointCallbackTestCase(unittest.TestCase):
                 root_dir=root_dir,
                 metric_name='val_acc',
                 smaller_is_better=False,
+                update_at_equal_metric=False,
                 max_no_improvement_epochs=12,
                 max_no_improvement_batches=23,
                 restore_on_error=True,
@@ -1271,6 +1274,7 @@ class CheckpointCallbackTestCase(unittest.TestCase):
             self.assertEqual(cb.max_no_improvement_batches, 23)
             self.assertTrue(cb.restore_on_error)
             self.assertTrue(cb._is_metric_better(2.0, 1.0))
+            self.assertFalse(cb._is_metric_better(1.0, 1.0))
             self.assertEqual(cb.max_checkpoints_to_keep, 2)
             self.assertIs(cb.state_objects['a'], a)
             self.assertFalse(cb.save_stage_state)
