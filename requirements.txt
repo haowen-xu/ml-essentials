@@ -6,7 +6,6 @@ filelock >= 3.0.10
 heapdict >= 1.0.0
 idx2numpy >= 1.2.2
 numpy >= 1.15.0
-pprint >= 0.1
 PyMongo >= 3.8.0
 pytz
 PyYAML >= 3.13
