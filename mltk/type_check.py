@@ -32,8 +32,8 @@ __all__ = [
     'IntTypeInfo', 'FloatTypeInfo', 'BoolTypeInfo', 'StrTypeInfo',
     'BytesTypeInfo', 'PatternTypeInfo', 'PathTypeInfo', 'NDArrayTypeInfo',
     'NoneTypeInfo', 'EnumTypeInfo', 'OptionalTypeInfo', 'UnionTypeInfo',
-    'ListTypeInfo', 'TupleTypeInfo',
-    'VardicTupleTypeInfo', 'DictTypeInfo',
+    'ListTypeInfo', 'SequenceTypeInfo', 'TupleTypeInfo',
+    'VardicTupleTypeInfo', 'DictTypeInfo', 'MappingTypeInfo',
 ]
 
 TYPE_INFO_MAGIC_FIELD = '__type_info__'
@@ -296,13 +296,25 @@ def type_info(type_) -> 'TypeInfo':
             if len(type_.__args__) == 1:
                 return ListTypeInfo(type_info(type_.__args__[0]))
 
+        # Sequence[T]
+        if type_.__origin__ is Sequence:
+            if len(type_.__args__) == 1:
+                return SequenceTypeInfo(type_info(type_.__args__[0]))
+
         # Dict[T1, T2]
         if type_.__origin__ is Dict or is_subclass_safe(type_.__origin__, dict):
             if len(type_.__args__) == 2:
                 return DictTypeInfo(type_info(type_.__args__[0]),
                                     type_info(type_.__args__[1]))
 
-        elif type_.__origin__ is Union:
+        # Dict[T1, T2]
+        if type_.__origin__ is Mapping:
+            if len(type_.__args__) == 2:
+                return MappingTypeInfo(type_info(type_.__args__[0]),
+                                       type_info(type_.__args__[1]))
+
+        # Union[A, B, ...]
+        if type_.__origin__ is Union:
             # parse the union types
             union_args = [type_info(t) for t in type_.__args__]
             has_none = any(isinstance(t, NoneTypeInfo) for t in union_args)
@@ -910,13 +922,17 @@ class TupleTypeInfo(MultiBaseTypeInfo):
         return tuple(buf)
 
 
-class SequenceTypeInfo(TypeInfo):
+class BaseSequenceTypeInfo(TypeInfo):
 
-    __slots__ = ('base_type_info', 'sequence_type')
+    __slots__ = ('base_type_info', 'sequence_type', 'coarse_type')
 
-    def __init__(self, base_type_info: TypeInfo, sequence_type: Type):
+    def __init__(self,
+                 base_type_info: TypeInfo,
+                 sequence_type: Type,
+                 coarse_type: Optional[Type] = None):
         self.base_type_info = base_type_info
         self.sequence_type = sequence_type
+        self.coarse_type = coarse_type or sequence_type
 
     def _check_value(self, o: Any, context: TypeCheckContext) -> Any:
         if not context.strict:
@@ -925,31 +941,54 @@ class SequenceTypeInfo(TypeInfo):
             elif not hasattr(o, '__iter__') or isinstance(o, (str, bytes)):
                 context.raise_error('value is not a sequence')
         else:
-            if not isinstance(o, self.sequence_type):
+            if not isinstance(o, (self.sequence_type, self.coarse_type)):
                 context.raise_error(f'value is not an instance of '
                                     f'{self.sequence_type.__qualname__}')
         buf = []
         for i, v in enumerate(o):
             with context.enter(str(i)):
                 buf.append(self.base_type_info.check_value(v, context))
-        if context.inplace and isinstance(o, self.sequence_type) and \
-                not issubclass(self.sequence_type, tuple):
+        if context.inplace and isinstance(o, self.coarse_type) and \
+                not issubclass(self.coarse_type, tuple):
             for i, v in enumerate(buf):
                 o[i] = v
             return o
         else:
-            return self.sequence_type(buf)
+            return self.coarse_type(buf)
 
     def __eq__(self, other):
         return isinstance(other, self.__class__) and \
             self.base_type_info == other.base_type_info and \
-            self.sequence_type == other.sequence_type
+            self.sequence_type == other.sequence_type and \
+            self.coarse_type == other.coarse_type
 
     def __hash__(self):
-        return hash((self.__class__, self.sequence_type, self.base_type_info))
+        return hash((self.__class__, self.base_type_info, self.sequence_type, self.coarse_type))
 
 
-class ListTypeInfo(SequenceTypeInfo):
+class SequenceTypeInfo(BaseSequenceTypeInfo):
+    """
+    Type information of ``Sequence[T]``.
+
+    >>> ti = type_info(Sequence[int])
+    >>> ti
+    <TypeInfo(Sequence[int])>
+    >>> ti.check_value(('1', 2.0, 3))
+    [1, 2, 3]
+    >>> ti.parse_string('[1, 2.0, "3"]')
+    [1, 2, 3]
+    """
+
+    def __init__(self, base_type_info: TypeInfo):
+        super().__init__(base_type_info=base_type_info,
+                         sequence_type=Sequence,
+                         coarse_type=list)
+
+    def __str__(self):
+        return f'Sequence[{self.base_type_info}]'
+
+
+class ListTypeInfo(BaseSequenceTypeInfo):
     """
     Type information of ``List[T]``.
 
@@ -969,7 +1008,7 @@ class ListTypeInfo(SequenceTypeInfo):
         return f'List[{self.base_type_info}]'
 
 
-class VardicTupleTypeInfo(SequenceTypeInfo):
+class VardicTupleTypeInfo(BaseSequenceTypeInfo):
     """
     Type information of ``Tuple[T, ...]``.
 
@@ -989,32 +1028,27 @@ class VardicTupleTypeInfo(SequenceTypeInfo):
         return f'Tuple[{self.base_type_info}, ...]'
 
 
-class DictTypeInfo(TypeInfo):
-    """
-    Type information of ``Dict[TKey, TValue]``.
+class BaseMappingTypeInfo(TypeInfo):
 
-    >>> ti = type_info(Dict[int, float])
-    >>> ti
-    <TypeInfo(Dict[int, float])>
-    >>> ti.check_value({'123': '456.0'})
-    {123: 456.0}
-    >>> ti.parse_string('{"123": "456.0"}')
-    {123: 456.0}
-    """
+    __slots__ = ('key_type_info', 'val_type_info', 'mapping_type', 'coarse_type')
 
-    __slots__ = ('key_type_info', 'val_type_info')
-
-    def __init__(self, key_type_info: TypeInfo, val_type_info: TypeInfo):
+    def __init__(self,
+                 key_type_info: TypeInfo,
+                 val_type_info: TypeInfo,
+                 mapping_type: Type,
+                 coarse_type: Optional[Type] = None):
         self.key_type_info = key_type_info
         self.val_type_info = val_type_info
+        self.mapping_type = mapping_type
+        self.coarse_type = coarse_type or mapping_type
 
     def _check_value(self, o: Any, context: TypeCheckContext) -> Dict[Any, Any]:
         # ensure `o` is a dict if strict = True
-        if context.strict and not isinstance(o, dict):
-            context.raise_error('value is not a dict')
+        if context.strict and not isinstance(o, self.mapping_type):
+            context.raise_error(f'value is not an instance of {self.mapping_type}')
 
         # backup the original dict instance, in case `context.inplace = True`
-        origin = o if isinstance(o, dict) and context.inplace else None
+        origin = o if isinstance(o, self.coarse_type) and context.inplace else None
         dct = {}
 
         if not hasattr(o, '__getitem__') or not hasattr(o, '__iter__'):
@@ -1034,18 +1068,69 @@ class DictTypeInfo(TypeInfo):
             origin.update(dct)
             dct = origin
 
+        if not isinstance(dct, self.coarse_type):
+            dct = self.coarse_type(dct)
         return dct
-
-    def __str__(self):
-        return f'Dict[{self.key_type_info}, {self.val_type_info}]'
 
     def __eq__(self, other):
         return isinstance(other, self.__class__) and \
             self.key_type_info == other.key_type_info and \
-            self.val_type_info == other.val_type_info
+            self.val_type_info == other.val_type_info and \
+            self.mapping_type == other.mapping_type and \
+            self.coarse_type == other.coarse_type
 
     def __hash__(self):
-        return hash((self.__class__, self.key_type_info, self.val_type_info))
+        return hash((self.__class__, self.key_type_info, self.val_type_info,
+                     self.mapping_type, self.coarse_type))
+
+
+class DictTypeInfo(BaseMappingTypeInfo):
+    """
+    Type information of ``Dict[TKey, TValue]``.
+
+    >>> ti = type_info(Dict[int, float])
+    >>> ti
+    <TypeInfo(Dict[int, float])>
+    >>> ti.check_value({'123': '456.0'})
+    {123: 456.0}
+    >>> ti.parse_string('{"123": "456.0"}')
+    {123: 456.0}
+    """
+
+    def __init__(self, key_type_info: TypeInfo, val_type_info: TypeInfo):
+        super().__init__(
+            key_type_info=key_type_info,
+            val_type_info=val_type_info,
+            mapping_type=dict,
+        )
+
+    def __str__(self):
+        return f'Dict[{self.key_type_info}, {self.val_type_info}]'
+
+
+class MappingTypeInfo(BaseMappingTypeInfo):
+    """
+    Type information of ``Mapping[TKey, TValue]``.
+
+    >>> ti = type_info(Mapping[int, float])
+    >>> ti
+    <TypeInfo(Mapping[int, float])>
+    >>> ti.check_value({'123': '456.0'})
+    {123: 456.0}
+    >>> ti.parse_string('{"123": "456.0"}')
+    {123: 456.0}
+    """
+
+    def __init__(self, key_type_info: TypeInfo, val_type_info: TypeInfo):
+        super().__init__(
+            key_type_info=key_type_info,
+            val_type_info=val_type_info,
+            mapping_type=Mapping,
+            coarse_type=dict,
+        )
+
+    def __str__(self):
+        return f'Mapping[{self.key_type_info}, {self.val_type_info}]'
 
 
 class ObjectFieldInfo(object):

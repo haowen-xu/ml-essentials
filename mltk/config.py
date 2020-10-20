@@ -6,7 +6,7 @@ import os
 import warnings
 from argparse import ArgumentParser, Action
 from dataclasses import dataclass, is_dataclass
-from functools import partial
+from enum import Enum
 from typing import *
 
 import yaml
@@ -574,7 +574,10 @@ validate_config = validate_object
 """Shortcut for :func:`check_value`."""
 
 
-def config_to_dict(o, flatten: bool = False) -> Dict[str, Any]:
+def config_to_dict(obj,
+                   flatten: bool = False,
+                   type_cast: Optional[Callable[[Any], Any]] = None
+                   ) -> Dict[str, Any]:
     """
     Cast a :class:`Config` instance or a dataclass object into a dict.
 
@@ -585,42 +588,59 @@ def config_to_dict(o, flatten: bool = False) -> Dict[str, Any]:
     {'a': 1, 'b.value': 2}
 
     Args:
-        o: The object to be casted.  It must be an instance of :class:`Config`
+        obj: The object to be casted.  It must be an instance of :class:`Config`
             or a dataclass object.
         flatten: Whether or not to flatten all nested objects?
             Defaults to :obj:`False`.
+        type_cast: Auxiliary type cast function, to convert a non-config object.
 
     Returns:
         The casted dict.
     """
-    dct = {}
+    if type_cast is None:
+        type_cast = lambda v: v
+
+    def f(o):
+        if isinstance(o, Config) or is_dataclass(o):
+            ret = {}
+            iter_assign(ret, '', o)
+            return ret
+        elif isinstance(o, dict):
+            return {k: f(v) for k, v in o.items()}
+        elif isinstance(o, (list, tuple)):
+            return [f(v) for v in o]
+        elif isinstance(o, Enum):
+            return o.value
+        else:
+            return type_cast(o)
+
+    def iter_assign(parent, pfx, val):
+        if isinstance(val, Config):
+            for sub_key in val:
+                assign_item(parent, f'{pfx}{sub_key}', val[sub_key])
+        elif is_dataclass(val):
+            for sub_key, sub_val in dataclasses.asdict(val).items():
+                assign_item(parent, f'{pfx}{sub_key}', sub_val)
 
     if flatten:
-        def populate_item(key, val):
-            if isinstance(val, Config) or is_dataclass(val):
-                for sub_key, sub_val in \
-                        config_to_dict(val, flatten=flatten).items():
-                    dct[f'{key}.{sub_key}'] = sub_val
+        def assign_item(parent, key, val):
+            if isinstance(val, Config):
+                for sub_key in val:
+                    assign_item(parent, f'{key}.{sub_key}', val[sub_key])
+            elif is_dataclass(val):
+                for sub_key, sub_val in dataclasses.asdict(val).items():
+                    assign_item(parent, f'{key}.{sub_key}', sub_val)
             else:
-                dct[key] = val
+                parent[key] = f(val)
     else:
-        def populate_item(key, val):
-            if isinstance(val, Config) or is_dataclass(val):
-                dct[key] = config_to_dict(val, flatten=flatten)
-            else:
-                dct[key] = val
+        def assign_item(parent, key, val):
+            parent[key] = f(val)
 
-    if isinstance(o, Config):
-        for key in o:
-            populate_item(key, o[key])
-    elif is_dataclass(o):
-        for key, val in dataclasses.asdict(o).items():
-            populate_item(key, val)
-    else:
-        raise TypeError(f'`o` is neither a Config nor a dataclass object: '
-                        f'{o!r}')
+    if not isinstance(obj, Config) and not is_dataclass(obj):
+        raise TypeError(f'`obj` is neither a Config nor a dataclass object: '
+                        f'{obj!r}')
 
-    return dct
+    return f(obj)
 
 
 def config_defaults(config: Union[TConfig, Type[TConfig]]) -> TConfig:

@@ -85,7 +85,7 @@ class ToNumberOrNumPyTestCase(unittest.TestCase):
             arr)
 
 
-class MiniBatchSlicesIteratorTestCase(unittest.TestCase):
+class MiniBatchIteratorTestCase(unittest.TestCase):
 
     def test_minibatch_slices_iterator(self):
         self.assertEqual(
@@ -107,6 +107,32 @@ class MiniBatchSlicesIteratorTestCase(unittest.TestCase):
         self.assertEqual(
             list(minibatch_slices_iterator(10, 9, True)),
             [slice(0, 9, 1)]
+        )
+
+    def test_arrays_minibatch_iterator(self):
+        def to_list(it):
+            ret = []
+            for batch in it:
+                ret.append(tuple(a.tolist() for a in batch))
+            return ret
+
+        arrays = [
+            np.asarray([1, 2, 3, 4, 5]),
+            np.asarray([6, 7, 8, 9, 10]),
+        ]
+
+        self.assertEqual(
+            to_list(arrays_minibatch_iterator(arrays, batch_size=3, skip_incomplete=False)),
+            [
+                ([1, 2, 3], [6, 7, 8]),
+                ([4, 5], [9, 10]),
+            ]
+        )
+        self.assertEqual(
+            to_list(arrays_minibatch_iterator(arrays, batch_size=3, skip_incomplete=True)),
+            [
+                ([1, 2, 3], [6, 7, 8]),
+            ]
         )
 
 

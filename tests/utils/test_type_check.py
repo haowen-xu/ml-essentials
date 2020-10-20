@@ -1,4 +1,5 @@
 import base64
+import collections
 import copy
 import gzip
 import os
@@ -20,7 +21,7 @@ from mltk.typing_ import *
 from mltk.utils import *
 from mltk.type_check import *
 from mltk.type_check import (PrimitiveTypeInfo, MultiBaseTypeInfo,
-                             SequenceTypeInfo, _ObjectDictProxy)
+                             BaseSequenceTypeInfo, _ObjectDictProxy)
 
 
 class TypeCheckErrorTestCase(unittest.TestCase):
@@ -289,6 +290,13 @@ class TypeInfoTestCase(unittest.TestCase):
             type_info(List[int]),
             VardicTupleTypeInfo(FloatTypeInfo()))
 
+        # Sequence[T]
+        assert_equal(type_info(Sequence[int]), SequenceTypeInfo(IntTypeInfo()))
+        assert_not_equal(type_info(Sequence[int]), SequenceTypeInfo(FloatTypeInfo()))
+        assert_not_equal(
+            type_info(Sequence[int]),
+            VardicTupleTypeInfo(FloatTypeInfo()))
+
         # Tuple[T, ...]
         assert_equal(
             type_info(Tuple[int, ...]),
@@ -307,6 +315,17 @@ class TypeInfoTestCase(unittest.TestCase):
         assert_not_equal(
             type_info(Dict[str, int]),
             DictTypeInfo(IntTypeInfo(), IntTypeInfo()))
+
+        # Mapping[TKey, TValue]
+        assert_equal(
+            type_info(Mapping[str, int]),
+            MappingTypeInfo(StrTypeInfo(), IntTypeInfo()))
+        assert_not_equal(
+            type_info(Mapping[str, int]),
+            MappingTypeInfo(StrTypeInfo(), StrTypeInfo()))
+        assert_not_equal(
+            type_info(Mapping[str, int]),
+            MappingTypeInfo(IntTypeInfo(), IntTypeInfo()))
 
         # data class
         my_bool_factory = lambda: True
@@ -597,12 +616,12 @@ class TypeInfoTestCase(unittest.TestCase):
             [123, '123', ('123.5', 123.0)]
         )
 
-    def test_sequence(self):
+    def test_base_sequence(self):
         class MyList(list):
             def __eq__(self, other):
                 return isinstance(other, MyList) and list.__eq__(self, other)
 
-        ti = SequenceTypeInfo(IntTypeInfo(), MyList)
+        ti = BaseSequenceTypeInfo(IntTypeInfo(), MyList)
         self._check_cast(ti, MyList([]), [MyList([])], [None, []], [False])
         self._check_cast(
             ti,
@@ -624,7 +643,9 @@ class TypeInfoTestCase(unittest.TestCase):
         self.assertEqual(ti.check_value([1, 2, 3]), (1, 2, 3))
 
     def test_list(self):
-        ti = SequenceTypeInfo(IntTypeInfo(), list)
+        ti = ListTypeInfo(IntTypeInfo())
+        self.assertEqual(str(ti), 'List[int]')
+
         v = [1, '2', 3.0]
         v_orig = deep_copy(v)
         v_ans = [1, 2, 3]
@@ -637,6 +658,28 @@ class TypeInfoTestCase(unittest.TestCase):
         v_out = ti.check_value(v, TypeCheckContext(inplace=True))
         self.assertIs(v_out, v)
         self.assertEqual(v_out, v_ans)
+
+    def test_sequence(self):
+        ti = SequenceTypeInfo(IntTypeInfo())
+        self.assertEqual(str(ti), 'Sequence[int]')
+
+        # list -> list
+        v = [1, '2', 3.0]
+        v_orig = deep_copy(v)
+        v_ans = [1, 2, 3]
+
+        v_out = ti.check_value(v)
+        self.assertIsNot(v_out, v)
+        self.assertEqual(v_out, v_ans)
+        self.assertEqual(v, v_orig)
+
+        v_out = ti.check_value(v, TypeCheckContext(inplace=True))
+        self.assertIs(v_out, v)
+        self.assertEqual(v_out, v_ans)
+
+        # tuple -> list is strict under Sequence[int]
+        v = (1, 2, 3)
+        self.assertEqual(ti.check_value(v, TypeCheckContext(strict=True)), v_ans)
 
     def test_dict(self):
         class MyDictLike(Mapping):
@@ -695,6 +738,28 @@ class TypeInfoTestCase(unittest.TestCase):
 
         v_out = ti.check_value(v, TypeCheckContext(inplace=True))
         self.assertIs(v_out, v)
+        self.assertEqual(v_out, v_ans)
+
+    def test_mapping(self):
+        ti = type_info(Mapping[str, float])
+        self.assertEqual(str(ti), 'Mapping[str, float]')
+
+        v = {'a': '12', 'b': 13.5}
+        v_orig = deep_copy(v)
+        v_ans = {'a': 12.0, 'b': 13.5}
+
+        v_out = ti.check_value(v)
+        self.assertIsNot(v_out, v)
+        self.assertEqual(v_out, v_ans)
+        self.assertEqual(v, v_orig)
+
+        v_out = ti.check_value(v, TypeCheckContext(inplace=True))
+        self.assertIs(v_out, v)
+        self.assertEqual(v_out, v_ans)
+
+        # strict should recognize OrderedDict
+        v = collections.OrderedDict({'a': 12.0, 'b': 13.5})
+        v_out = ti.check_value(v, TypeCheckContext(strict=True))
         self.assertEqual(v_out, v_ans)
 
     def test_object_field_info(self):

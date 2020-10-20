@@ -3,9 +3,11 @@ import os
 import shutil
 import unittest
 from dataclasses import dataclass
+from enum import Enum
 from tempfile import TemporaryDirectory
 from typing import *
 
+import numpy as np
 import pytest
 import yaml
 
@@ -257,9 +259,21 @@ class ConfigTestCase(unittest.TestCase):
         self.assertEqual(cfg, MyConfig(b=123.5, c='hello, world'))
 
     def test_to_dict(self):
+        class MyEnum(str, Enum):  # should support enum
+            A = 'a'
+            B = 'b'
+            C = 'c'
+
         @dataclass
         class MyDataClass(object):
             value: int = 3
+            value2: MyEnum = MyEnum.A
+
+        class MyNested(Config):
+            xx: float = 2.5
+
+            class nested2(Config):
+                yy: float = 1.25
 
         class MyConfig(Config):
             a: int = 1
@@ -267,21 +281,83 @@ class ConfigTestCase(unittest.TestCase):
             class nested(Config):
                 b: float = 2.0
                 data_object = MyDataClass()
+                data_object_list: List[MyDataClass] = [
+                    MyDataClass(value=4, value2=MyEnum.B),
+                    MyDataClass(value=5, value2=MyEnum.C)
+                ]
+                config_dict: Dict[str, MyNested] = {
+                    'n1': MyNested(),
+                    'n2': MyNested(xx=3.75, nested2=MyNested.nested2(yy=2.75)),
+                }
 
         cfg = MyConfig()
         self.assertDictEqual(
             config_to_dict(cfg),
-            {'a': 1, 'nested': {'b': 2.0, 'data_object': {'value': 3}}}
+            {
+                'a': 1,
+                'nested': {
+                    'b': 2.0,
+                    'data_object': {
+                        'value': 3,
+                        'value2': 'a'
+                    },
+                    'data_object_list': [
+                        {'value': 4, 'value2': 'b'},
+                        {'value': 5, 'value2': 'c'},
+                    ],
+                    'config_dict': {
+                        'n1': {'xx': 2.5, 'nested2': {'yy': 1.25}},
+                        'n2': {'xx': 3.75, 'nested2': {'yy': 2.75}},
+                    }
+                }
+            }
         )
         self.assertDictEqual(
             config_to_dict(cfg, flatten=True),
-            {'a': 1, 'nested.b': 2.0, 'nested.data_object.value': 3}
+            {
+                'a': 1,
+                'nested.b': 2.0,
+                'nested.data_object.value': 3,
+                'nested.data_object.value2': 'a',
+                'nested.data_object_list': [
+                    {'value': 4, 'value2': 'b'},
+                    {'value': 5, 'value2': 'c'},
+                ],
+                'nested.config_dict': {
+                    'n1': {'xx': 2.5, 'nested2.yy': 1.25},
+                    'n2': {'xx': 3.75, 'nested2.yy': 2.75},
+                }
+            }
         )
 
         with pytest.raises(TypeError,
-                           match='`o` is neither a Config nor a dataclass '
+                           match='`obj` is neither a Config nor a dataclass '
                                  'object: 123'):
             _ = config_to_dict(123)
+
+    def test_to_dict_with_type_cast(self):
+        def type_cast(o):
+            if isinstance(o, np.ndarray):
+                o = o.tolist()
+            return o
+
+        class MyConfig(Config):
+            class nested(Config):
+                val: Any = np.asarray([1, 2, 3])
+
+        cfg = MyConfig()
+        self.assertDictEqual(
+            config_to_dict(cfg, type_cast=type_cast),
+            {
+                'nested': {
+                    'val': [1, 2, 3],
+                }
+            }
+        )
+        self.assertDictEqual(
+            config_to_dict(cfg, flatten=True, type_cast=type_cast),
+            {'nested.val': [1, 2, 3]}
+        )
 
     def test_config_defaults(self):
         class MyConfig(Config):

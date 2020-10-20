@@ -7,7 +7,7 @@ from .misc import generate_random_seed
 
 __all__ = [
     'get_array_shape', 'to_number_or_numpy', 'minibatch_slices_iterator',
-    'split_numpy_arrays', 'split_numpy_array',
+    'arrays_minibatch_iterator', 'split_numpy_arrays', 'split_numpy_array',
 ]
 
 
@@ -67,9 +67,9 @@ def minibatch_slices_iterator(length: int,
     Iterate through all the mini-batch slices.
 
     Args:
-        length (int): Total length of data in an epoch.
-        batch_size (int): Size of each mini-batch.
-        skip_incomplete (bool): If :obj:`True`, discard the final
+        length: Total length of data in an epoch.
+        batch_size: Size of each mini-batch.
+        skip_incomplete: If :obj:`True`, discard the final
             batch if it contains less than `batch_size` number of items.
             (default :obj:`False`)
 
@@ -84,6 +84,30 @@ def minibatch_slices_iterator(length: int,
         start += batch_size
     if not skip_incomplete and start < length:
         yield slice(start, length, 1)
+
+
+def arrays_minibatch_iterator(arrays: Sequence[Array],
+                              batch_size: int,
+                              skip_incomplete: bool = False
+                              ) -> Generator[slice, None, None]:
+    """
+    Iterate through all the mini-batches in the arrays.
+
+    Args:
+        arrays: Total length of data in an epoch.
+        batch_size: Size of each mini-batch.
+        skip_incomplete: If :obj:`True`, discard the final
+            batch if it contains less than `batch_size` number of items.
+            (default :obj:`False`)
+
+    Yields
+        Tuple of arrays of each mini-batch.  The last mini-batch may contain
+        less indices than `batch_size`.
+    """
+    length = len(arrays[0])
+    for slc in minibatch_slices_iterator(
+            length, batch_size=batch_size, skip_incomplete=skip_incomplete):
+        yield tuple(a[slc] for a in arrays)
 
 
 def split_numpy_arrays(arrays: Sequence[np.ndarray],
