@@ -259,6 +259,7 @@ class ConfigTestCase(unittest.TestCase):
         self.assertEqual(cfg, MyConfig(b=123.5, c='hello, world'))
 
     def test_to_dict(self):
+        self.maxDiff = 100000
         class MyEnum(str, Enum):  # should support enum
             A = 'a'
             B = 'b'

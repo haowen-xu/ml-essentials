@@ -569,6 +569,59 @@ class Config(metaclass=ConfigMeta):
         attributes = ', '.join(f'{key}={self[key]!r}' for key in sorted(self))
         return f'{name}({attributes})'
 
+    def to_dict(self,
+                flatten: bool = False,
+                type_cast: Optional[Callable[[Any], Any]] = None
+                ) -> Dict[str, Any]:
+        """
+        Cast this config instance to a dict.
+
+        >>> cfg = Config(a=1, b=Config(value=2))
+        >>> cfg.to_dict()
+        {'a': 1, 'b': {'value': 2}}
+        >>> cfg.to_dict(flatten=True)
+        {'a': 1, 'b.value': 2}
+
+        Args:
+            flatten: Whether or not to flatten all nested objects?
+            type_cast: Auxiliary type cast function, to convert a non-config object.
+
+        Returns:
+            The dict.
+        """
+        def f(o):
+            if not isinstance(o, Config) and is_dataclass(o):
+                o = Config(**dataclasses.asdict(o))
+
+            if isinstance(o, Config):
+                return o.to_dict(flatten=flatten, type_cast=type_cast)
+            elif isinstance(o, dict):
+                return {k: f(v) for k, v in o.items()}
+            elif isinstance(o, (list, tuple)):
+                return [f(v) for v in o]
+            elif isinstance(o, Enum):
+                return o.value
+            else:
+                if type_cast is not None:
+                    o = type_cast(o)
+                return o
+
+        ret = {}
+        for key in self:
+            val = self[key]
+
+            if isinstance(val, Config) or is_dataclass(val):
+                nested = f(val)
+                if flatten:
+                    for sub_key, sub_val in nested.items():
+                        ret[f'{key}.{sub_key}'] = sub_val
+                else:
+                    ret[key] = nested
+            else:
+                ret[key] = f(val)
+
+        return ret
+
 
 validate_config = validate_object
 """Shortcut for :func:`check_value`."""
@@ -597,50 +650,14 @@ def config_to_dict(obj,
     Returns:
         The casted dict.
     """
-    if type_cast is None:
-        type_cast = lambda v: v
+    if not isinstance(obj, Config) and is_dataclass(obj):
+        obj = Config(**dataclasses.asdict(obj))
 
-    def f(o):
-        if isinstance(o, Config) or is_dataclass(o):
-            ret = {}
-            iter_assign(ret, '', o)
-            return ret
-        elif isinstance(o, dict):
-            return {k: f(v) for k, v in o.items()}
-        elif isinstance(o, (list, tuple)):
-            return [f(v) for v in o]
-        elif isinstance(o, Enum):
-            return o.value
-        else:
-            return type_cast(o)
-
-    def iter_assign(parent, pfx, val):
-        if isinstance(val, Config):
-            for sub_key in val:
-                assign_item(parent, f'{pfx}{sub_key}', val[sub_key])
-        elif is_dataclass(val):
-            for sub_key, sub_val in dataclasses.asdict(val).items():
-                assign_item(parent, f'{pfx}{sub_key}', sub_val)
-
-    if flatten:
-        def assign_item(parent, key, val):
-            if isinstance(val, Config):
-                for sub_key in val:
-                    assign_item(parent, f'{key}.{sub_key}', val[sub_key])
-            elif is_dataclass(val):
-                for sub_key, sub_val in dataclasses.asdict(val).items():
-                    assign_item(parent, f'{key}.{sub_key}', sub_val)
-            else:
-                parent[key] = f(val)
-    else:
-        def assign_item(parent, key, val):
-            parent[key] = f(val)
-
-    if not isinstance(obj, Config) and not is_dataclass(obj):
+    if not isinstance(obj, Config):
         raise TypeError(f'`obj` is neither a Config nor a dataclass object: '
                         f'{obj!r}')
 
-    return f(obj)
+    return obj.to_dict(flatten=flatten, type_cast=type_cast)
 
 
 def config_defaults(config: Union[TConfig, Type[TConfig]]) -> TConfig:
