@@ -1056,7 +1056,7 @@ class ConfigLoader(Generic[TConfig]):
         self.load_object(parsed)
 
 
-def object_to_config(config_cls: TConfig, obj: Any) -> TConfig:
+def object_to_config(config_cls: Type[TConfig], obj: Any) -> TConfig:
     """
     Convert an object into config.
 
