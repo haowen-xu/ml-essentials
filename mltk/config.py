@@ -20,7 +20,7 @@ __all__ = [
     'field_checker', 'root_checker', 'config_field', 'ConfigField',
     'config_params', 'get_config_params', 'ConfigMeta',
     'Config', 'validate_config', 'config_to_dict', 'config_defaults',
-    'ConfigLoader',
+    'ConfigLoader', 'object_to_config',
     'format_config', 'print_config', 'save_config',
 ]
 
@@ -741,8 +741,7 @@ class ConfigLoader(Generic[TConfig]):
             )
         )
 
-    def load_object(self, key_values: Union[Mapping, Config],
-                    include_root: str = '.'):
+    def load_object(self, key_values: Union[Mapping, Config]):
         """
         Load config attributes from the specified `key_values` object.
 
@@ -786,8 +785,6 @@ class ConfigLoader(Generic[TConfig]):
 
         Args:
             key_values: The dict or config object.
-            include_root: Root directory, where to resolve "$includes" list.
-                Take effect only if `self.use_include` is True.
         """
         if not isinstance(key_values, (Mapping, Config)):
             raise TypeError(f'`key_values` must be a dict or a Config object: '
@@ -877,7 +874,7 @@ class ConfigLoader(Generic[TConfig]):
         Args:
             path: Path of the YAML file.
             Loader: The YAML loader class.  If not specified, will use
-                :class:`tensorkit.utils.YAMLIncludeLoader`
+                :class:`mltk.utils.YAMLIncludeLoader`
                 if `self.use_include` is True, or `yaml.SafeLoader` otherwise.
         """
         if Loader is NOT_SET:
@@ -1057,6 +1054,22 @@ class ConfigLoader(Generic[TConfig]):
         parsed = {key: value for key, value in vars(namespace).items()
                   if value is not NOT_SET}
         self.load_object(parsed)
+
+
+def object_to_config(config_cls: TConfig, obj: Any) -> TConfig:
+    """
+    Convert an object into config.
+
+    Args:
+        config_cls: The config class.
+        obj: The object.
+
+    Returns:
+        The config object.
+    """
+    config_loader = ConfigLoader(config_cls)
+    config_loader.load_object(obj)
+    return config_loader.get()
 
 
 def format_config(config: Config,

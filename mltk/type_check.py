@@ -1,4 +1,5 @@
 import base64
+import collections
 import copy
 import gzip
 
@@ -222,7 +223,8 @@ class TypeInfo(Generic[TObject]):
 
 
 generic_alias_types = (type(Tuple[int]), type(Tuple[int, ...]),
-                       type(List[int]), type(Dict[str, int]),
+                       type(List[int]), type(Sequence[int]),
+                       type(Dict[str, int]), type(Mapping[str, int]),
                        type(Union[int, float]),)
 is_subclass_safe = lambda t, base: isinstance(t, type) and issubclass(t, base)
 
@@ -297,7 +299,7 @@ def type_info(type_) -> 'TypeInfo':
                 return ListTypeInfo(type_info(type_.__args__[0]))
 
         # Sequence[T]
-        if type_.__origin__ is Sequence:
+        if type_.__origin__ is Sequence or is_subclass_safe(type_.__origin__, collections.abc.Sequence):
             if len(type_.__args__) == 1:
                 return SequenceTypeInfo(type_info(type_.__args__[0]))
 
@@ -308,7 +310,7 @@ def type_info(type_) -> 'TypeInfo':
                                     type_info(type_.__args__[1]))
 
         # Dict[T1, T2]
-        if type_.__origin__ is Mapping:
+        if type_.__origin__ is Mapping or is_subclass_safe(type_.__origin__, collections.abc.Mapping):
             if len(type_.__args__) == 2:
                 return MappingTypeInfo(type_info(type_.__args__[0]),
                                        type_info(type_.__args__[1]))

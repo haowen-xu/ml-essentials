@@ -465,6 +465,17 @@ class ConfigLoaderTestCase(unittest.TestCase):
         loader2 = ConfigLoader(loader.get())
         self.assertEqual(loader2.get(), loader.get())
 
+    def test_object_to_config(self):
+        class MyConfig(Config):
+            a: int
+            class nested(Config):
+                b: float
+
+        self.assertEqual(
+            object_to_config(MyConfig, {'a': 123, 'nested.b': 456.75}),
+            MyConfig(a=123, nested=MyConfig.nested(b=456.75))
+        )
+
     def test_load_file(self):
         with TemporaryDirectory() as temp_dir:
             json_file = os.path.join(temp_dir, 'test.json')
