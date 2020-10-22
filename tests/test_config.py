@@ -376,6 +376,27 @@ class ConfigTestCase(unittest.TestCase):
                                  'nor a subclass of Config: got 123'):
             _ = config_defaults(123)
 
+    def test_slots(self):
+        class Nested(Config):
+            __slots__ = ['value']
+            value: float
+
+        class MyConfig(Config):
+            __slots__ = ['a', 'b']
+            a: int
+            b: Nested
+
+        cfg = MyConfig(a=123, b=Nested(value=456.5))
+        self.assertEqual(cfg.a, 123)
+        self.assertEqual(cfg.b.value, 456.5)
+        self.assertEqual(list(cfg), ['a', 'b'])
+        for key in ['a', 'b']:
+            self.assertIn(key, cfg)
+            self.assertEqual(cfg[key], getattr(cfg, key))
+
+        self.assertEqual(cfg.to_dict(), {'a': 123, 'b': {'value': 456.5}})
+        self.assertEqual(cfg.to_dict(flatten=True), {'a': 123, 'b.value': 456.5})
+
 
 class ConfigLoaderTestCase(unittest.TestCase):
 
@@ -465,6 +486,34 @@ class ConfigLoaderTestCase(unittest.TestCase):
 
         loader2 = ConfigLoader(loader.get())
         self.assertEqual(loader2.get(), loader.get())
+
+    def test_load_with_slots(self):
+        class Nested(Config):
+            __slots__ = ['value']
+            value: float
+
+        class Nested2(Config):
+            __slots__ = ['value2']
+            value2: str
+
+        class MyConfig(Config):
+            __slots__ = ['a', 'b', 'c']
+            a: int
+            b: Nested
+            c: List[Nested2]
+
+        self.assertEqual(
+            object_to_config(MyConfig, {
+                'a': 123,
+                'b.value': 456.5,
+                'c': [{'value2': 'abc'}, {'value2': 'def'}]
+            }),
+            MyConfig(
+                a=123, b=Nested(value=456.5), c=[
+                    Nested2(value2='abc'), Nested2(value2='def')
+                ]
+            )
+        )
 
     def test_object_to_config(self):
         class MyConfig(Config):

@@ -546,12 +546,18 @@ class Config(metaclass=ConfigMeta):
         delattr(self, key)
 
     def __iter__(self) -> Iterator[str]:
+        if hasattr(self, '__slots__'):
+            return iter(self.__slots__)
         return iter(self.__dict__)
 
     def __len__(self) -> int:
+        if hasattr(self, '__slots__'):
+            return len(self.__slots__)
         return len(self.__dict__)
 
     def __contains__(self, item):
+        if hasattr(self, '__slots__'):
+            return item in self.__slots__
         return item in self.__dict__
 
     def __eq__(self, other):
