@@ -1430,6 +1430,7 @@ class ObjectTypeInfo(TypeInfo[TObject]):
         )
 
     def _check_value(self, o: Any, context: TypeCheckContext) -> TObject:
+
         inplace_check: bool = False
 
         if not isinstance(o, self.object_type):

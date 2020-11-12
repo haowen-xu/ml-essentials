@@ -515,6 +515,19 @@ class ConfigLoaderTestCase(unittest.TestCase):
             )
         )
 
+    def test_load_object_no_split_key(self):
+        class MyConfig(Config):
+            deps: Dict[str, Dict[str, Any]]
+
+        class MyConfig2(Config):
+            deps: Dict[str, MyConfig]
+
+        a = MyConfig2(deps={'x.y.z': MyConfig(deps={'a.b.c': {'d': 123}})})
+        dct = a.to_dict(flatten=True)
+        loader = ConfigLoader(MyConfig2)
+        loader.load_object(dct, no_split_key=True)
+        self.assertEqual(loader.get(), a)
+
     def test_object_to_config(self):
         class MyConfig(Config):
             a: int

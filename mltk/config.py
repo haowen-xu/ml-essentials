@@ -764,7 +764,9 @@ class ConfigLoader(Generic[TConfig]):
             )
         )
 
-    def load_object(self, key_values: Union[Mapping, Config]):
+    def load_object(self,
+                    key_values: Union[Mapping, Config],
+                    no_split_key: bool = False):
         """
         Load config attributes from the specified `key_values` object.
 
@@ -808,6 +810,7 @@ class ConfigLoader(Generic[TConfig]):
 
         Args:
             key_values: The dict or config object.
+            no_split_key: If True, will not split keys with internal ".".
         """
         if not isinstance(key_values, (Mapping, Config)):
             raise TypeError(f'`key_values` must be a dict or a Config object: '
@@ -823,14 +826,17 @@ class ConfigLoader(Generic[TConfig]):
                     f'attribute into a non-object attribute')
 
                 # find the target node in dst
-                parts = key.split('.')
                 tmp = dst
-                for part in parts[:-1]:
-                    if part not in tmp:
-                        tmp[part] = Config()
-                    elif not isinstance(tmp[part], Config):
-                        raise ValueError(err_msg2())
-                    tmp = tmp[part]
+                if no_split_key:
+                    parts = [key]
+                else:
+                    parts = key.split('.')
+                    for part in parts[:-1]:
+                        if part not in tmp:
+                            tmp[part] = Config()
+                        elif not isinstance(tmp[part], Config):
+                            raise ValueError(err_msg2())
+                        tmp = tmp[part]
 
                 # get the src and dst values
                 part = parts[-1]
