@@ -7,6 +7,7 @@ heapdict >= 1.0.0
 idx2numpy >= 1.2.2
 numpy >= 1.15.0
 PyMongo >= 3.8.0
+python-dateutil
 pytz
 PyYAML >= 3.13
 requests >= 2.19.1

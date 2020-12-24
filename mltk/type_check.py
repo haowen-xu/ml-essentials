@@ -1,9 +1,8 @@
 import base64
 import collections
 import copy
-import gzip
-
 import dataclasses
+import gzip
 import inspect
 import os
 import pickle as pkl
@@ -11,12 +10,14 @@ import re
 import warnings
 from contextlib import contextmanager
 from dataclasses import dataclass, is_dataclass
+from datetime import date, datetime
 from enum import Enum
 from pathlib import Path
 from typing import *
 
 import numpy as np
 import yaml
+from dateutil.parser import parse as parse_datetime
 
 from .typing_ import *
 from .utils import NOT_SET, Singleton, deep_copy
@@ -31,7 +32,8 @@ __all__ = [
     # various type info classes
     'AnyTypeInfo',
     'IntTypeInfo', 'FloatTypeInfo', 'BoolTypeInfo', 'StrTypeInfo',
-    'BytesTypeInfo', 'PatternTypeInfo', 'PathTypeInfo', 'NDArrayTypeInfo',
+    'BytesTypeInfo', 'PatternTypeInfo', 'PathTypeInfo', 'DateTypeInfo',
+    'DateTimeTypeInfo', 'NDArrayTypeInfo',
     'NoneTypeInfo', 'EnumTypeInfo', 'OptionalTypeInfo', 'UnionTypeInfo',
     'ListTypeInfo', 'SequenceTypeInfo', 'TupleTypeInfo',
     'VardicTupleTypeInfo', 'DictTypeInfo', 'MappingTypeInfo',
@@ -260,6 +262,10 @@ def type_info(type_) -> 'TypeInfo':
             return PatternTypeInfo()
         elif issubclass(type_, Path):
             return PathTypeInfo()
+        elif issubclass(type_, datetime):
+            return DateTimeTypeInfo()
+        elif issubclass(type_, date):
+            return DateTypeInfo()
         elif issubclass(type_, np.ndarray):
             return NDArrayTypeInfo()
         elif is_dataclass(type_):
@@ -654,7 +660,67 @@ class PathTypeInfo(PrimitiveTypeInfo[Path]):
         return 'Path'
 
 
-class NDArrayTypeInfo(TypeInfo[np.ndarray]):
+class DateTypeInfo(PrimitiveTypeInfo[date]):
+    """
+    Type information of ``date``.
+
+    >>> t = type_info(date)
+    >>> t
+    <TypeInfo(date)>
+    >>> t.check_value('2020-01-02')
+    datetime.date(2020, 1, 2)
+    >>> t.check_value(date(2020, 1, 2))
+    datetime.date(2020, 1, 2)
+    >>> t.parse_string('2020-01-02')
+    datetime.date(2020, 1, 2)
+    """
+
+    def _check_value(self, o: Any, context: TypeCheckContext) -> Path:
+        if not context.strict:
+            if isinstance(o, str):
+                o = parse_datetime(o)
+            if isinstance(o, datetime):
+                o = o.date()
+        if not isinstance(o, date) or isinstance(o, datetime):
+            context.raise_error('value is not a date')
+        return o
+
+    def __str__(self):
+        return 'date'
+
+
+class DateTimeTypeInfo(PrimitiveTypeInfo[datetime]):
+    """
+    Type information of ``datetime``.
+
+    >>> t = type_info(datetime)
+    >>> t
+    <TypeInfo(datetime)>
+    >>> t.check_value('2020-01-02')
+    datetime.datetime(2020, 1, 2, 0, 0)
+    >>> t.check_value('2020-01-02 13:14:15')
+    datetime.datetime(2020, 1, 2, 13, 14, 15)
+    >>> t.check_value(datetime(2020, 1, 2, 13, 14, 15))
+    datetime.datetime(2020, 1, 2, 13, 14, 15)
+    >>> t.parse_string('2020-01-02 13:14:15')
+    datetime.datetime(2020, 1, 2, 13, 14, 15)
+    """
+
+    def _check_value(self, o: Any, context: TypeCheckContext) -> Path:
+        if not context.strict:
+            if isinstance(o, str):
+                o = parse_datetime(o)
+            if isinstance(o, date) and not isinstance(o, datetime):
+                o = datetime(o.year, o.month, o.day, 0, 0, 0)
+        if not isinstance(o, datetime):
+            context.raise_error('value is not a datetime')
+        return o
+
+    def __str__(self):
+        return 'datetime'
+
+
+class NDArrayTypeInfo(TypeInfo[np.ndarray], Singleton):
     """
     Type information of ``numpy.ndarray``.
 
@@ -683,12 +749,6 @@ class NDArrayTypeInfo(TypeInfo[np.ndarray]):
 
     def __str__(self):
         return 'numpy.ndarray'
-
-    def __eq__(self, other):
-        return isinstance(other, self.__class__)
-
-    def __hash__(self):
-        return hash(self.__class__)
 
 
 class NoneTypeInfo(TypeInfo[None], Singleton):

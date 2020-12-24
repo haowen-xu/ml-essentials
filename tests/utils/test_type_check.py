@@ -8,6 +8,7 @@ import re
 import unittest
 import warnings
 from dataclasses import dataclass, field
+from datetime import date, datetime
 from enum import Enum
 from functools import partial
 from pathlib import Path
@@ -498,6 +499,35 @@ class TypeInfoTestCase(unittest.TestCase):
         # test inplace = False
         path = Path('.')
         self.assertIsNot(ti.check_value(path), path)
+
+    def test_date(self):
+        ti = type_info(date)
+        self.assertEqual(str(ti), 'date')
+        self._check_cast(
+            ti,
+            date(2020, 1, 2),
+            [date(2020, 1, 2)],
+            ['2020-01-02', datetime(2020, 1, 2, 13, 14, 15), '2020-01-02 13:14:15'],
+            [object()]
+        )
+
+    def test_datetime(self):
+        ti = type_info(datetime)
+        self.assertEqual(str(ti), 'datetime')
+        self._check_cast(
+            ti,
+            datetime(2020, 1, 2, 13, 14, 15),
+            [datetime(2020, 1, 2, 13, 14, 15)],
+            ['2020-01-02 13:14:15'],
+            [object()]
+        )
+        self._check_cast(
+            ti,
+            datetime(2020, 1, 2, 0, 0, 0),
+            [datetime(2020, 1, 2, 0, 0, 0)],
+            ['2020-01-02', date(2020, 1, 2), '2020-01-02'],
+            [object()]
+        )
 
     def test_ndarray(self):
         serialized_array = base64.b64encode(
