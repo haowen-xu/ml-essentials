@@ -133,6 +133,8 @@ def format_duration(duration: Union[float, int, timedelta],
     '2s'
     >>> format_duration(1.51, count_down=True)
     '2s'
+    >>> format_duration(10)
+    '10s'
     >>> format_duration(59.99, precision=2)
     '59.99s'
     >>> format_duration(59.99, precision=2, count_down=True)
@@ -230,7 +232,8 @@ def format_duration(duration: Union[float, int, timedelta],
             if seconds > 1e-8:
                 # seconds_int = int(seconds)
                 seconds_str = f'{seconds:.{precision}f}'
-                seconds_str = seconds_str.rstrip('0').rstrip('.')
+                if '.' in seconds_str:
+                    seconds_str = seconds_str.rstrip('0').rstrip('.')
                 ret.append(f'{seconds_str}s')
 
             if not has_days_part and not ret:
