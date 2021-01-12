@@ -227,6 +227,8 @@ class TypeInfoTestCase(unittest.TestCase):
         assert_equal(type_info(bytes), BytesTypeInfo())
         assert_equal(type_info(None), NoneTypeInfo())
         assert_equal(type_info(type(None)), NoneTypeInfo())
+        assert_equal(type_info(...), EllipsisTypeInfo())
+        assert_equal(type_info(type(...)), EllipsisTypeInfo())
         assert_equal(type_info(PatternType), PatternTypeInfo())
         assert_equal(type_info_from_value(re.compile('.*')), PatternTypeInfo())
         assert_equal(type_info(Path), PathTypeInfo())
@@ -559,6 +561,18 @@ class TypeInfoTestCase(unittest.TestCase):
         ti = type_info(None)
         self.assertEqual(str(ti), 'None')
         self._check_cast(ti, None, [None], [], ['xxx', 'null', 'NULL', 'None'])
+        self.assertEqual(ti.parse_string(''), None)
+        self.assertEqual(ti.parse_string('null'), None)
+        self.assertEqual(ti.parse_string('NULL'), None)
+        self.assertEqual(ti.parse_string('none'), None)
+        self.assertEqual(ti.parse_string('None'), None)
+        with pytest.raises(TypeCheckError, match='value is not None'):
+            _ = ti.parse_string('xxx')
+
+    def test_Ellipse(self):
+        ti = type_info(...)
+        self.assertEqual(str(ti), '...')
+        self._check_cast(ti, ..., [...], [], ['...', 'Ellipse', 'ellipse'])
         self.assertEqual(ti.parse_string(''), None)
         self.assertEqual(ti.parse_string('null'), None)
         self.assertEqual(ti.parse_string('NULL'), None)

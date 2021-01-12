@@ -6,7 +6,7 @@ from bson import ObjectId
 
 __all__ = [
     'TConfig', 'TObject', 'TValue',
-    'MetricValue', 'PatternType', 'CommandOrArgsType',
+    'MetricValue', 'PatternType', 'EllipsisType', 'CommandOrArgsType',
     'DocumentType', 'FilterType', 'ExperimentId',
     'Array', 'ArrayTuple', 'ArrayTupleOrList', 'ArraysOrArray',
     'ArraysOrArrayGenerator', 'XYArrayTuple', 'ArrayDType',
@@ -24,6 +24,9 @@ TValue = TypeVar('TValue')
 
 PatternType = type(re.compile('x'))
 """The type of regex patterns."""
+
+EllipsisType = type(...)
+"""The type of ellipsis "..."."""
 
 MetricValue = Union[float, np.ndarray]
 """The metric value type, i.e., a float number oer a float array."""

@@ -34,8 +34,8 @@ __all__ = [
     'IntTypeInfo', 'FloatTypeInfo', 'BoolTypeInfo', 'StrTypeInfo',
     'BytesTypeInfo', 'PatternTypeInfo', 'PathTypeInfo', 'DateTypeInfo',
     'DateTimeTypeInfo', 'NDArrayTypeInfo',
-    'NoneTypeInfo', 'EnumTypeInfo', 'OptionalTypeInfo', 'UnionTypeInfo',
-    'ListTypeInfo', 'SequenceTypeInfo', 'TupleTypeInfo',
+    'NoneTypeInfo', 'EllipsisTypeInfo', 'EnumTypeInfo', 'OptionalTypeInfo',
+    'UnionTypeInfo', 'ListTypeInfo', 'SequenceTypeInfo', 'TupleTypeInfo',
     'VardicTupleTypeInfo', 'DictTypeInfo', 'MappingTypeInfo',
 ]
 
@@ -243,6 +243,8 @@ def type_info(type_) -> 'TypeInfo':
     """
     if type_ is None or type_ == type(None):
         return NoneTypeInfo()
+    if type_ is ... or type_ == type(EllipsisType):
+        return EllipsisTypeInfo()
 
     # try to match known types
     if isinstance(type_, type):
@@ -776,6 +778,34 @@ class NoneTypeInfo(TypeInfo[None], Singleton):
 
     def __str__(self):
         return 'None'
+
+
+class EllipsisTypeInfo(PrimitiveTypeInfo[EllipsisType]):
+    """
+    Type information of ``Ellipsis``.
+
+    >>> t = type_info(...)
+    >>> t
+    <TypeInfo(...)>
+    >>> t.check_value(...)
+    Ellipsis
+    >>> t.parse_string('Ellipsis')
+    Ellipsis
+    >>> t.parse_string('...')
+    Ellipsis
+    """
+
+    def _check_value(self, o: Any, context: TypeCheckContext) -> None:
+        if o is not ...:
+            if not context.strict:
+                if isinstance(o, str) and o.lower() in ('...', 'ellipsis'):
+                    o = ...
+        if o is not ...:
+            context.raise_error('value is not Ellipsis')
+        return o
+
+    def __str__(self):
+        return '...'
 
 
 class EnumTypeInfo(TypeInfo[TObject]):
