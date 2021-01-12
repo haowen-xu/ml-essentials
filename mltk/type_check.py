@@ -243,7 +243,7 @@ def type_info(type_) -> 'TypeInfo':
     """
     if type_ is None or type_ == type(None):
         return NoneTypeInfo()
-    if type_ is ... or type_ == type(EllipsisType):
+    if type_ is ... or type_ == EllipsisType:
         return EllipsisTypeInfo()
 
     # try to match known types

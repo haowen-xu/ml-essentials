@@ -569,17 +569,10 @@ class TypeInfoTestCase(unittest.TestCase):
         with pytest.raises(TypeCheckError, match='value is not None'):
             _ = ti.parse_string('xxx')
 
-    def test_Ellipse(self):
+    def test_Ellipsis(self):
         ti = type_info(...)
         self.assertEqual(str(ti), '...')
-        self._check_cast(ti, ..., [...], [], ['...', 'Ellipse', 'ellipse'])
-        self.assertEqual(ti.parse_string(''), None)
-        self.assertEqual(ti.parse_string('null'), None)
-        self.assertEqual(ti.parse_string('NULL'), None)
-        self.assertEqual(ti.parse_string('none'), None)
-        self.assertEqual(ti.parse_string('None'), None)
-        with pytest.raises(TypeCheckError, match='value is not None'):
-            _ = ti.parse_string('xxx')
+        self._check_cast(ti, ..., [...], ['...', 'Ellipsis', 'ellipsis'], [0, None, 'null'])
 
     def test_enum(self):
         # typed enum
