@@ -248,7 +248,12 @@ def type_info(type_) -> 'TypeInfo':
 
     # try to match known types
     if isinstance(type_, type):
-        if issubclass(type_, Enum):
+        # if __type_info__ is specified, use that
+        if hasattr(type_, TYPE_INFO_MAGIC_FIELD):
+            return getattr(type_, TYPE_INFO_MAGIC_FIELD)
+
+        # otherwise match standard types
+        elif issubclass(type_, Enum):
             return EnumTypeInfo(type_)
         elif issubclass(type_, bool):
             return BoolTypeInfo()
@@ -287,8 +292,6 @@ def type_info(type_) -> 'TypeInfo':
                     default_factory=default_factory,
                 )
             return ObjectTypeInfo(type_, fields)
-        elif hasattr(type_, TYPE_INFO_MAGIC_FIELD):
-            return getattr(type_, TYPE_INFO_MAGIC_FIELD)
 
     # try to match generic types from typing module
     if isinstance(type_, generic_alias_types):

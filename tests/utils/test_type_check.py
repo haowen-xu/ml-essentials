@@ -123,6 +123,19 @@ class TypeCheckErrorTestCase(unittest.TestCase):
         )
 
 
+class Int64TypeInfo(IntTypeInfo):
+
+    def _check_value(self, o: Any, context: TypeCheckContext) -> int:
+        return int64(super()._check_value(o, context))
+
+    def __str__(self):
+        return 'int64'
+
+
+class int64(int):
+    __type_info__ = Int64TypeInfo()
+
+
 class TypeInfoTestCase(unittest.TestCase):
 
     def test_base(self):
@@ -217,6 +230,9 @@ class TypeInfoTestCase(unittest.TestCase):
 
         def assert_not_equal(ti1, ti2):
             self.assertNotEqual(ti1, ti2)
+
+        # override core type
+        assert_equal(type_info(int64), Int64TypeInfo())
 
         # primitive types
         assert_equal(type_info(Any), AnyTypeInfo())
@@ -445,6 +461,11 @@ class TypeInfoTestCase(unittest.TestCase):
     def test_int(self):
         ti = type_info(int)
         self.assertEqual(str(ti), 'int')
+        self._check_cast(ti, 123, [123], ['123', 123.0], [123.5, 'xxx'])
+
+    def test_int64(self):
+        ti = type_info(int64)
+        self.assertEqual(str(ti), 'int64')
         self._check_cast(ti, 123, [123], ['123', 123.0], [123.5, 'xxx'])
 
     def test_float(self):
