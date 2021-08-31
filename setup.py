@@ -30,7 +30,7 @@ install_requires = [s for s in requirements_list if not s.startswith('git+')]
 
 
 setup(
-    name='ML Essentials',
+    name='ml-essentials',
     version=version,
     url='https://github.com/haowen-xu/ml-essentials/',
     license='MIT',
