@@ -12,6 +12,11 @@ pipeline {
         sh './ci-scripts/deploy.sh quant-tradesys-testbed1'
       }
     }
+    stage('deploy quant-tradesys-testbed-ui') {
+      steps {
+        sh './ci-scripts/deploy.sh quant-tradesys-testbed-ui'
+      }
+    }
     stage('deploy quant-tradesys-pipeline') {
       steps {
         sh './ci-scripts/deploy.sh quant-tradesys-pipeline'
