@@ -293,6 +293,12 @@ class MLRunner(object):
                 parts = u.netloc.rsplit(':', 1)
                 if parts[0] in ('0.0.0.0', '[::0]'):
                     parts[0] = socket.gethostname()
+                    try:
+                        ip = socket.gethostbyname(parts[0])
+                        if ip not in ('127.0.0.1', '::1', '0.0.0.0', '::0'):
+                            parts[0] = ip
+                    except Exception:
+                        pass
                     u = SplitResult(
                         scheme=u.scheme, netloc=':'.join(parts),
                         path=u.path, query=u.query, fragment=u.fragment
@@ -773,7 +779,8 @@ def mlrun(config_file, name, description, tags, env, gpu, work_dir, server,
     # parse the daemon
     if tensorboard:
         daemon = list(daemon or [])
-        daemon.append('tensorboard --logdir=. --port=0')
+        daemon.append('tensorboard --logdir=. --port=0 --host=0.0.0.0')
+        parse_stdout = True
 
     # feed CLI arguments into MLRunnerConfig
     cli_config = {
