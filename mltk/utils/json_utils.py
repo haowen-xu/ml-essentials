@@ -6,12 +6,15 @@ from typing import Any, Tuple
 from uuid import UUID
 
 import numpy as np
-from bson import SON, ObjectId
+from bson import SON, ObjectId, UuidRepresentation
 from bson.json_util import JSONOptions, JSONMode, dumps, loads
 
 __all__ = ['json_dumps', 'json_loads']
 
-JSON_OPTIONS = JSONOptions(json_mode=JSONMode.RELAXED)
+JSON_OPTIONS = JSONOptions(
+    json_mode=JSONMode.RELAXED,
+    uuid_representation=UuidRepresentation.PYTHON_LEGACY,
+)
 JSON_OPTIONS.strict_uuid = False  # do not move it to the constructor above!
 
 
@@ -129,8 +132,8 @@ def json_loads(s: str, **kwargs) -> Any:
     {'values': [0.1, 2]}
     >>> json_loads('{"$date":"2019-06-15T14:50:00Z"}')  # doctest: +ELLIPSIS
     datetime.datetime(2019, 6, 15, 14, 50...)
-    >>> str(json_loads('{"$uuid":"b8429bf5a9c544efa8a3f954e8aff204"}'))
-    'b8429bf5-a9c5-44ef-a8a3-f954e8aff204'
+    >>> json_loads('{"$uuid":"b8429bf5a9c544efa8a3f954e8aff204"}')
+    UUID('b8429bf5-a9c5-44ef-a8a3-f954e8aff204')
     >>> json_loads('{"$oid":"5d04930e9dcf3fec04050251"}')
     ObjectId('5d04930e9dcf3fec04050251')
 
