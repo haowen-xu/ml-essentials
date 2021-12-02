@@ -128,7 +128,7 @@ def json_loads(s: str, **kwargs) -> Any:
     >>> json_loads('{"values":[0.1,2]}')
     {'values': [0.1, 2]}
     >>> json_loads('{"$date":"2019-06-15T14:50:00Z"}')  # doctest: +ELLIPSIS
-    datetime.datetime(2019, 6, 15, 14, 50, tzinfo=...)
+    datetime.datetime(2019, 6, 15, 14, 50...)
     >>> json_loads('{"$uuid":"b8429bf5a9c544efa8a3f954e8aff204"}')
     UUID('b8429bf5-a9c5-44ef-a8a3-f954e8aff204')
     >>> json_loads('{"$oid":"5d04930e9dcf3fec04050251"}')

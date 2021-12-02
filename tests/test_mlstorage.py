@@ -61,7 +61,7 @@ class MLStorageClientTestCase(unittest.TestCase):
         object_ids = [str(ObjectId()) for _ in range(5)]
         docs = [
             {'_id': object_ids[i], 'storage_dir': f'/{object_ids[i]}',
-             'uuid': uuid.uuid4()}
+             'uuid': str(uuid.uuid4())}
             for i in range(len(object_ids))
         ]
 
@@ -115,7 +115,7 @@ class MLStorageClientTestCase(unittest.TestCase):
         object_ids = [str(ObjectId()) for _ in range(5)]
         docs = [
             {'_id': object_ids[i], 'storage_dir': f'/{object_ids[i]}',
-             'uuid': uuid.uuid4()}
+             'uuid': str(uuid.uuid4())}
             for i in range(len(object_ids))
         ]
 
@@ -139,7 +139,7 @@ class MLStorageClientTestCase(unittest.TestCase):
         doc = {
             '_id': object_id,
             'storage_dir': f'/{object_id}',
-            'uuid': uuid.uuid4(),
+            'uuid': str(uuid.uuid4()),
         }
 
         def callback(request, uri, response_headers):
@@ -177,7 +177,7 @@ class MLStorageClientTestCase(unittest.TestCase):
     def test_add_tags(self):
         object_id = str(ObjectId())
         doc_fields = {
-            'uuid': uuid.uuid4(),
+            'uuid': str(uuid.uuid4()),
             'name': 'hello',
             'storage_dir': f'/{object_id}',
         }
@@ -302,7 +302,7 @@ class MLStorageClientTestCase(unittest.TestCase):
         object_id = str(ObjectId())
         doc_fields = {
             '_id': object_id,
-            'uuid': uuid.uuid4(),
+            'uuid': str(uuid.uuid4()),
             'name': 'hello',
             'status': 'COMPLETED',
             'storage_dir': f'/{object_id}',
