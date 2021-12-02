@@ -212,7 +212,7 @@ class GeneralMetricCollector(MetricCollector):
         else:
             batch_shape = values.shape
 
-        batch_weight = np.ones(shape=batch_shape, dtype=np.float) * weight
+        batch_weight = np.ones(shape=batch_shape, dtype=np.float64) * weight
         batch_weight = np.reshape(batch_weight,
                                   batch_weight.shape + (1,) * len(self.shape))
         batch_weight_sum = np.sum(batch_weight)

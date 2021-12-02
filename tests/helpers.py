@@ -19,6 +19,7 @@ __all__ = [
 
 FAST = os.environ.get('FAST_TEST', '0') == '1'
 LOCAL = os.environ.get('LOCAL_TEST', '0') == '1'
+REMOTE = os.environ.get('LOCAL_TEST', '0') == '1'
 
 try:
     import torch
@@ -35,9 +36,9 @@ def slow_test(method):
 
 
 def remote_test(method):
-    return unittest.skipIf(
-        FAST or LOCAL,
-        'remote tests are skipped in fast test and local test mode'
+    return unittest.skipUnless(
+        REMOTE,
+        'remote tests are skipped unless REMOTE=1'
     )(method)
 
 

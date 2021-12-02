@@ -53,7 +53,8 @@ class MLStorageClientTestCase(unittest.TestCase):
             if expected_sort is not None:
                 self.assertEqual(
                     request.querystring['sort'][0], str(expected_sort))
-            self.assertEqual(request.body, expected_body)
+            if expected_body is not None:
+                self.assertEqual(request.body, expected_body)
             response_headers['content-type'] = 'application/json; charset=utf-8'
             return [200, response_headers, response_body]
 
@@ -65,6 +66,16 @@ class MLStorageClientTestCase(unittest.TestCase):
         ]
 
         # test bare query
+        for doc in docs:
+            httpretty_register_uri(
+                httpretty.GET,
+                f'http://127.0.0.1/v1/_get/{doc["_id"]}',
+                body=partial(
+                    callback, expected_body=None, expected_skip=None,
+                    expected_limit=None, expected_sort=None,
+                    response_body=json_dumps(doc)
+                )
+            )
         httpretty_register_uri(
             httpretty.POST,
             'http://127.0.0.1/v1/_query',
@@ -276,6 +287,12 @@ class MLStorageClientTestCase(unittest.TestCase):
             body=callback
         )
         self.assertListEqual(self.client.delete(object_id), [object_id])
+
+        httpretty_register_uri(
+            httpretty.GET,
+            f'http://127.0.0.1/v1/_get/{object_id}',
+            body=lambda: [404, {}, b'{}']
+        )
 
         with pytest.raises(requests.exceptions.ConnectionError):
             _ = self.client.get_storage_dir(object_id)

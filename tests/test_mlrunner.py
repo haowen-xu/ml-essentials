@@ -373,7 +373,7 @@ class MLRunnerTestCase(unittest.TestCase):
                     server=server.uri,
                     name='test',
                     args=[
-                        'python',
+                        sys.executable,
                         '-c',
                         'print("hello")\n'
                         'print("[Epoch 2/5, Batch 3/6, Step 4, ETA 5s] epoch_time: 1s; loss: 0.25 (±0.1); span: 5")\n'
@@ -828,7 +828,7 @@ class MLRunTestCase(unittest.TestCase):
                     daemon=[
                         'echo hello',
                         'echo hi',
-                        'tensorboard --logdir=. --port=0',
+                        'tensorboard --logdir=. --port=0 --host=0.0.0.0',
                     ],
                     source=MLRunnerConfig.source(
                         copy_to_dst=True,
@@ -965,7 +965,7 @@ class ProgramHostTestCase(unittest.TestCase):
         logs = []
         code, output = run_and_get_output(
             [
-                r'python', '-c',
+                sys.executable, '-c',
                 r'import sys, time; '
                 r'sys.stdout.write("hello\n"); '
                 r'sys.stdout.flush(); '
@@ -999,7 +999,7 @@ class ProgramHostTestCase(unittest.TestCase):
         logs = []
         code, output = run_and_get_output(
             [
-                r'python', '-c',
+                sys.executable, '-c',
                 r'import sys, time; '
                 r'sys.stdout.write("hello\n"); '
                 r'sys.stdout.flush(); '
@@ -1046,7 +1046,7 @@ class ProgramHostTestCase(unittest.TestCase):
             # test kill by SIGINT
             host = ProgramHost(
                 [
-                    'python',
+                    sys.executable,
                     '-u', '-c',
                     'import time, sys\n'
                     'for i in range(100):\n'
@@ -1071,7 +1071,7 @@ class ProgramHostTestCase(unittest.TestCase):
             log_file = os.path.join(temp_dir, 'console.log')
             host = ProgramHost(
                 [
-                    'python',
+                    sys.executable,
                     '-u', '-c',
                     'import sys, time\n'
                     'while True:\n'

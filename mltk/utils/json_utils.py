@@ -70,7 +70,7 @@ def json_dumps(o: Any, *, separators: Tuple[str, str] = (',', ':'),
     '{"$numberDouble":"NaN"}'
     >>> json_dumps(np.concatenate([np.arange(5), [np.nan, np.inf, -np.inf]], axis=0))
     '[0.0,1.0,2.0,3.0,4.0,{"$numberDouble":"NaN"},{"$numberDouble":"Infinity"},{"$numberDouble":"-Infinity"}]'
-    >>> json_dumps({'values': [np.float(0.1), np.int(2)]})
+    >>> json_dumps({'values': [np.float64(0.1), np.int(2)]})
     '{"values":[0.1,2]}'
     >>> json_dumps(datetime(2019, 6, 15, 14, 50))
     '{"$date":"2019-06-15T14:50:00Z"}'

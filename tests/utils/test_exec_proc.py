@@ -100,7 +100,7 @@ class ExcProcTestCase(unittest.TestCase):
         # test interruptable
         stdout = io.BytesIO()
         with exec_proc(
-                ['python', '-u', '-c', interruptable],
+                [sys.executable, '-u', '-c', interruptable],
                 on_stdout=stdout.write) as proc:
             timed_wait_proc(proc, 1.5)
         self.assertIn(b'kbd interrupt', stdout.getvalue())
@@ -109,7 +109,7 @@ class ExcProcTestCase(unittest.TestCase):
         # test non-interruptable, give up waiting
         stdout = io.BytesIO()
         with exec_proc(
-                ['python', '-u', '-c', non_interruptable],
+                [sys.executable, '-u', '-c', non_interruptable],
                 on_stdout=stdout.write,
                 ctrl_c_timeout=1) as proc:
             timed_wait_proc(proc, 1.)
