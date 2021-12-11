@@ -1,3 +1,4 @@
+import sys
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -485,27 +486,34 @@ class AfterEveryFewCyclesCallback(object):
 
     loop: 'TrainLoop'
     fn: Callable[[], None]
+    on_error: bool
 
-    def __init__(self, fn: Callable[[], None], loop: 'TrainLoop'):
+    def __init__(self, fn: Callable[[], None], loop: 'TrainLoop', on_error: bool):
         self.fn = fn
         self.loop = loop
+        self.on_error = on_error
+
+    def _call(self):
+        raise NotImplementedError()
 
     def __call__(self):
-        raise NotImplementedError()
+        if self.on_error or sys.exc_info()[0] is None:
+            return self._call()
 
 
 class AfterEveryFewEpochsCallback(AfterEveryFewCyclesCallback):
 
     epochs: int
 
-    def __init__(self, fn: Callable[[], None], loop: 'TrainLoop', epochs: int):
+    def __init__(self, fn: Callable[[], None], loop: 'TrainLoop', epochs: int,
+                 on_error: bool):
         if epochs <= 0 or abs(epochs - int(epochs)) > 1e-6:
             raise ValueError(f'`epochs` must be a positive integer: got {epochs}')
 
-        super().__init__(fn, loop)
+        super().__init__(fn, loop, on_error)
         self.epochs = int(epochs)
 
-    def __call__(self):
+    def _call(self):
         if self.loop.epoch % self.epochs == 0:
             return self.fn()
 
@@ -514,14 +522,15 @@ class AfterEveryFewBatchesCallback(AfterEveryFewCyclesCallback):
 
     batches: int
 
-    def __init__(self, fn: Callable[[], None], loop: 'TrainLoop', batches: int):
+    def __init__(self, fn: Callable[[], None], loop: 'TrainLoop', batches: int,
+                 on_error: bool):
         if batches <= 0 or abs(batches - int(batches)) > 1e-6:
             raise ValueError(f'`batches` must be a positive integer: got {batches}')
 
-        super().__init__(fn, loop)
+        super().__init__(fn, loop, on_error)
         self.batches = int(batches)
 
-    def __call__(self):
+    def _call(self):
         if self.loop.batch % self.batches == 0:
             return self.fn()
 
@@ -589,6 +598,7 @@ class TrainLoop(BaseLoop):
                         *,
                         epochs: Optional[int] = None,
                         batches: Optional[int] = None,
+                        on_error: bool = False,
                         ) -> Optional[AfterEveryFewCyclesCallback]:
         """
         Register a callback that runs after every few epochs or batches.
@@ -597,6 +607,7 @@ class TrainLoop(BaseLoop):
             fn: The callback to run.
             epochs: The number of epochs.
             batches: The number of batches.
+            on_error: If an error occurs, will run `fn` only if this is True.
 
         Returns:
             Returns a callback object, which can be un-registered via
@@ -607,10 +618,10 @@ class TrainLoop(BaseLoop):
             raise ValueError('`epochs` and `batches` cannot be both specified.')
 
         if epochs is not None:
-            cb = AfterEveryFewEpochsCallback(fn, self, epochs)
+            cb = AfterEveryFewEpochsCallback(fn, self, epochs, on_error)
             self.on_epoch_end.do(cb)
         elif batches is not None:
-            cb = AfterEveryFewBatchesCallback(fn, self, batches)
+            cb = AfterEveryFewBatchesCallback(fn, self, batches, on_error)
             self.on_batch_end.do(cb)
         else:
             cb = None

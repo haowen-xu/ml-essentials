@@ -887,6 +887,33 @@ class TrainLoopTestCase(unittest.TestCase):
             "'metrics': {'pre_stage': 2.0, 'post_stage': 5.0}}"
         ])
 
+    def test_run_on_error(self):
+        # test not run on error
+        logs = []
+        loop = TrainLoop(max_epoch=2)
+        loop.run_after_every((lambda: logs.append(loop.epoch)), epochs=1)
+        with pytest.raises(RuntimeError, match='break the loop'):
+            with loop:
+                for j in loop.iter_epochs():
+                    if j == 2:
+                        raise RuntimeError(f'break the loop')
+                    else:
+                        pass
+        self.assertListEqual(logs, [1])
+
+        # test run on error
+        logs = []
+        loop = TrainLoop(max_epoch=2)
+        loop.run_after_every((lambda: logs.append(loop.epoch)), epochs=1, on_error=True)
+        with pytest.raises(RuntimeError, match='break the loop'):
+            with loop:
+                for j in loop.iter_epochs():
+                    if j == 2:
+                        raise RuntimeError(f'break the loop')
+                    else:
+                        pass
+        self.assertListEqual(logs, [1, 2])
+
     def test_sub_loop(self):
         cb = Callback()
         remote_doc = ExperimentDoc()

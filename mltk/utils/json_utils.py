@@ -6,15 +6,19 @@ from typing import Any, Tuple
 from uuid import UUID
 
 import numpy as np
-from bson import SON, ObjectId, UuidRepresentation
+from bson import SON, ObjectId
 from bson.json_util import JSONOptions, JSONMode, dumps, loads
 
 __all__ = ['json_dumps', 'json_loads']
 
-JSON_OPTIONS = JSONOptions(
-    json_mode=JSONMode.RELAXED,
-    uuid_representation=UuidRepresentation.PYTHON_LEGACY,
-)
+try:
+    from bson import UuidRepresentation
+    JSON_OPTIONS = JSONOptions(
+        json_mode=JSONMode.RELAXED,
+        uuid_representation=UuidRepresentation.PYTHON_LEGACY,
+    )
+except ImportError:
+    JSON_OPTIONS = JSONOptions(json_mode=JSONMode.RELAXED)
 JSON_OPTIONS.strict_uuid = False  # do not move it to the constructor above!
 
 
