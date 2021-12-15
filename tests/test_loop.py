@@ -467,6 +467,9 @@ class BaseLoopTestCase(unittest.TestCase):
             }
 
         class _MyCallback(Callback):
+            def on_metrics(self, data: CallbackData):
+                logs.append(f'cb:on_metrics:{summarize_data(data)}')
+
             def on_stage_begin(self, data: CallbackData):
                 logs.append(f'cb:stage_begin:{summarize_data(data)}')
 
@@ -494,6 +497,7 @@ class BaseLoopTestCase(unittest.TestCase):
         loop.on_batch_end.do(lambda: logs.append('batch_end'))
 
         with mock.patch('time.time', fake_timer):
+            loop.add_metrics({'pre': 1.0})
             with loop:
                 loop.add_metrics({'pre': 2.0})
                 for i, [batch_x] in loop.iter_batches(g):
@@ -506,28 +510,42 @@ class BaseLoopTestCase(unittest.TestCase):
                                    match='BaseLoop is not re-entrant.'):
                     with loop:
                         pass
+            loop.add_metrics({'post': 4.0})
 
-        self.assertEqual(logs, [
+        self.assertListEqual(logs, [
+            'cb:on_metrics:{\'metrics\': {\'pre\': 1.0}}',
             'begin',
             "cb:stage_begin:{'start_timestamp': 0.0}",
+            "cb:on_metrics:{'start_timestamp': 0.0, 'metrics': {'pre': 2.0}}",
             'batch_begin',
             "cb:batch_begin:{'index': 1, 'size': 3, 'start_timestamp': 0.0}",
             'batch_end',
+            "cb:on_metrics:{'index': 1, 'size': 3, 'start_timestamp': 0.0, "
+            "'end_timestamp': 0.0, 'exc_time': 0.0, 'metrics': {'i': 1, 'avg(x)': 1.0}}",
             "cb:batch_end:{'index': 1, 'size': 3, 'start_timestamp': 0.0, "
             "'end_timestamp': 0.0, 'exc_time': 0.0, 'metrics': {'i': 1, 'avg(x)': 1.0}}",
             'batch_begin',
             "cb:batch_begin:{'index': 2, 'size': 3, 'start_timestamp': 0.0}",
             'batch_end',
+            "cb:on_metrics:{'index': 2, 'size': 3, 'start_timestamp': 0.0, "
+            "'end_timestamp': 0.0, 'exc_time': 0.0, 'metrics': {'i': 2, 'avg(x)': 4.0}}",
             "cb:batch_end:{'index': 2, 'size': 3, 'start_timestamp': 0.0, "
             "'end_timestamp': 0.0, 'exc_time': 0.0, 'metrics': {'i': 2, 'avg(x)': 4.0}}",
             'batch_begin',
             "cb:batch_begin:{'index': 3, 'size': 2, 'start_timestamp': 0.0}",
             'batch_end',
+            "cb:on_metrics:{'index': 3, 'size': 2, 'start_timestamp': 0.0, "
+            "'end_timestamp': 0.0, 'exc_time': 0.0, 'metrics': {'i': 3, 'avg(x)': 6.5}}",
             "cb:batch_end:{'index': 3, 'size': 2, 'start_timestamp': 0.0, "
             "'end_timestamp': 0.0, 'exc_time': 0.0, 'metrics': {'i': 3, 'avg(x)': 6.5}}",
+            "cb:on_metrics:{'start_timestamp': 0.0, 'metrics': {'pre': 2.0, 'post': 3.0}}",
             'end',
+            "cb:on_metrics:{'start_timestamp': 0.0, 'end_timestamp': 0.0, 'exc_time': 0.0, "
+            "'metrics': {'pre': 2.0, 'post': 3.0}}",
             "cb:stage_end:{'start_timestamp': 0.0, 'end_timestamp': 0.0, 'exc_time': 0.0, "
-            "'metrics': {'pre': 2.0, 'post': 3.0}}"
+            "'metrics': {'pre': 2.0, 'post': 3.0}}",
+            'cb:on_metrics:{\'start_timestamp\': 0.0, \'end_timestamp\': 0.0, '
+            '\'exc_time\': 0.0, \'metrics\': {\'pre\': 2.0, \'post\': 4.0}}',
         ])
 
 

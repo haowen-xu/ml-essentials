@@ -1322,10 +1322,12 @@ class ControlPortServerTestCase(unittest.TestCase):
         server = ControlServer('127.0.0.1', 12379)
         self.assertEqual(server.uri, 'http://127.0.0.1:12379')
 
-        server = ControlServer()
+        server = ControlServer('127.0.0.1')
         logs = []
 
         with server.run_in_background():
+            time.sleep(0.5)
+
             # test not found
             r = requests.get(server.uri)
             self.assertEqual(r.status_code, 404)

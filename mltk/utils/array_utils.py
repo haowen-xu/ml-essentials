@@ -55,6 +55,8 @@ def to_number_or_numpy(arr) -> Union[np.ndarray, float, int]:
         if hasattr(arr, 'cpu'):  # PyTorch further requires ``.cpu()`` before calling ``.numpy()``
             arr = arr.cpu()
         return arr.numpy()
+    elif hasattr(arr, 'eval'):
+        return arr.eval()
     else:
         return np.array(arr)
 

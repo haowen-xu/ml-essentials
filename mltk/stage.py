@@ -434,6 +434,24 @@ class Stage(object):
         else:
             return self.batch.estimated_time_ahead()
 
+    def push_metrics(self, metrics) -> None:
+        if self.end_timestamp is not None:
+            exc_time = self.end_timestamp - self.start_timestamp
+        else:
+            exc_time = None
+
+        event_data = CallbackData(
+            stage=self,
+            index=None,
+            size=None,
+            start_timestamp=self.start_timestamp,
+            end_timestamp=self.end_timestamp,
+            exc_time=exc_time,
+            metrics=metrics,
+        )
+        for cb in self.callbacks:
+            cb.on_metrics(event_data)
+
     def enter(self) -> None:
         if self.start_timestamp:
             raise RuntimeError('`Stage` is neither re-entrant, nor reusable.')
@@ -476,6 +494,7 @@ class Stage(object):
                 metrics=metrics
             )
             for cb in self.callbacks:
+                cb.on_metrics(event_data)
                 getattr(cb, event_name)(event_data)
                 cb.on_stage_end(event_data)
         finally:
@@ -527,6 +546,7 @@ class Stage(object):
                 metrics=metrics
             )
             for cb in self.callbacks:
+                cb.on_metrics(event_data)
                 getattr(cb, event_name)(event_data)
                 cb.on_epoch_end(event_data)
 
@@ -575,6 +595,7 @@ class Stage(object):
                 metrics=metrics
             )
             for cb in self.callbacks:
+                cb.on_metrics(event_data)
                 getattr(cb, event_name)(event_data)
                 cb.on_batch_end(event_data)
 

@@ -65,9 +65,17 @@ class ToNumberOrNumPyTestCase(unittest.TestCase):
         except ImportError:
             pass
         else:
-            np.testing.assert_equal(
-                to_number_or_numpy(tf.constant(arr)),
-                arr)
+            def fn():
+                np.testing.assert_equal(
+                    to_number_or_numpy(tf.constant(arr)),
+                    arr
+                )
+
+            if hasattr(tf, 'Session'):
+                with tf.Session().as_default():
+                    fn()
+            else:
+                fn()
 
         # test PyTorch
         try:
@@ -77,12 +85,14 @@ class ToNumberOrNumPyTestCase(unittest.TestCase):
         else:
             np.testing.assert_equal(
                 to_number_or_numpy(torch.from_numpy(arr)),
-                arr)
+                arr
+            )
 
         # test others
         np.testing.assert_equal(
             to_number_or_numpy(arr.tolist()),
-            arr)
+            arr
+        )
 
 
 class MiniBatchIteratorTestCase(unittest.TestCase):

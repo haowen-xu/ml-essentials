@@ -408,7 +408,7 @@ class StageTestCase(unittest.TestCase):
                 self.assertIsNone(stage._current_batch_size)
                 self.assertEqual(stage.best_validation_mark, True)
                 assert_logs(
-                    ['on_train_batch_end', 'on_batch_end'],
+                    ['on_metrics', 'on_train_batch_end', 'on_batch_end'],
                     {
                         'index': 4, 'size': 123, 'start_timestamp': 3.,
                         'end_timestamp': 4., 'exc_time': 1.,
@@ -427,7 +427,7 @@ class StageTestCase(unittest.TestCase):
                 self.assertEqual(stage._current_batch_size, None)
                 self.assertEqual(stage.best_validation_mark, True)
                 assert_logs(
-                    ['on_train_epoch_end', 'on_epoch_end'],
+                    ['on_metrics', 'on_train_epoch_end', 'on_epoch_end'],
                     {
                         'index': 3, 'size': 987, 'start_timestamp': 2.,
                         'end_timestamp': 5., 'exc_time': 3.,
@@ -452,7 +452,7 @@ class StageTestCase(unittest.TestCase):
                 self.assertEqual(stage.batch.is_active, False)
                 self.assertEqual(stage.best_validation_mark, True)
                 assert_logs(
-                    ['on_train_end', 'on_stage_end'],
+                    ['on_metrics', 'on_train_end', 'on_stage_end'],
                     {
                         'start_timestamp': 1., 'end_timestamp': 6.,
                         'exc_time': 5., 'metrics': {'ll': 0.125},

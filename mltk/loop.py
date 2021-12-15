@@ -223,6 +223,7 @@ class BaseLoop(metaclass=DocInherit):
                 collect(self._epoch_metrics)
             else:
                 collect(self._stage_metrics)
+                self._stage.push_metrics(self._stage_metrics)
 
     @contextmanager
     def timeit(self, metric_name: str):

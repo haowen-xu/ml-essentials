@@ -66,6 +66,12 @@ class Callback(object):
     should be called earlier than other callbacks with larger priorities.
     """
 
+    ###########
+    # metrics #
+    ###########
+    def on_metrics(self, data: CallbackData):
+        pass  # pragma: no cover
+
     ##################
     # general events #
     ##################
@@ -273,7 +279,7 @@ class _LoggerContext(object):
 
         Args:
             metrics: The batch, epoch or stage metrics from stage callback.
-            replace: Whether or not to replace the epoch/stage metrics
+            replace: Whether to replace the epoch/stage metrics
                 instead of updating them.
             batch_size: The batch size information from stage callback.
         """
@@ -603,6 +609,14 @@ class LoggerCallback(Callback):
             self.ctx.progress['eta'] = eta
         else:
             self.ctx.progress.pop('eta', None)
+
+    def on_metrics(self, data: CallbackData):
+        if not self._ctx_stack and self.remote_doc is not None:
+            # some immediate metrics outside a loop context
+            m_logger = ScalarMetricsLogger()
+            m_logger.update(data.metrics)
+            payload = {'result': m_logger.to_json()}
+            self.remote_doc.update(payload)
 
     def on_stage_begin(self, data: CallbackData):
         self._ctx_stack.append(_LoggerContext.new_context(data.stage))

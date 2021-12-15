@@ -621,9 +621,18 @@ class LoggerCallbackTestCase(unittest.TestCase):
             console_log_batch_freq=2,
             remote_push_interval=.1,
         )
+
         stage = Stage(StageType.TRAIN, max_epoch=13, max_batch=78)
         stage.start_timestamp = 0.5
         stage.get_eta = mock.Mock(return_value=61)
+
+        ################
+        # on_metrics() #
+        ################
+        data = new_callback_data(stage=stage, metrics={'a': 123.5})
+        cb.on_metrics(data)
+        self.assertEqual(remote_doc.logs, [('update', {'result': {'a': 123.5}})])
+        remote_doc.logs.clear()
 
         ####################
         # on_stage_begin() #
@@ -871,6 +880,15 @@ class LoggerCallbackTestCase(unittest.TestCase):
             }),
             'stop_worker'
         ])
+        remote_doc.logs.clear()
+
+        ################
+        # on_metrics() #
+        ################
+        data = new_callback_data(stage=stage, metrics={'b': 789.5})
+        cb.on_metrics(data)
+        self.assertEqual(remote_doc.logs, [('update', {'result': {'b': 789.5}})])
+        remote_doc.logs.clear()
 
 
 class StopOnNaNTestCase(unittest.TestCase):
