@@ -3,6 +3,7 @@
 import os
 import re
 import socket
+import subprocess
 import sys
 import time
 import unittest
@@ -17,7 +18,8 @@ from bson import ObjectId
 from click.testing import CliRunner
 from mock import Mock
 
-from mltk import ConfigValidationError, MLStorageClient, validate_config, ProgramOutputReceiver
+import mltk
+from mltk import ConfigValidationError, MLStorageClient, validate_config, ProgramOutputReceiver, config_params
 from mltk.mlrunner import (ProgramHost, MLRunnerConfig, SourceCopier,
                            MLRunnerConfigLoader, TemporaryFileCleaner,
                            JsonFileWatcher, MLRunner, mlrun, ControlServer)
@@ -737,62 +739,76 @@ class MLRunnerTestCase(unittest.TestCase):
                           doc['error']['traceback'])
 
 
-class PatchedMLRunner(MLRunner):
+def make_PatchedMLRunner():
+    class PatchedMLRunner(MLRunner):
 
-    exit_code: int = 0
-    last_instance: 'PatchedMLRunner' = None
+        exit_code: int = 0
+        last_instance: 'PatchedMLRunner' = None
 
-    def __init__(self, config):
-        super().__init__(config)
-        self.__class__.last_instance = self
+        def __init__(self, config):
+            super().__init__(config)
+            self.__class__.last_instance = self
 
-    def run(self):
-        return self.exit_code
+        def run(self):
+            return self.exit_code
+
+    return PatchedMLRunner
 
 
-class PatchedMLRunnerConfigLoader(MLRunnerConfigLoader):
+def make_PatchedMLRunnerConfigLoader():
+    class PatchedMLRunnerConfigLoader(MLRunnerConfigLoader):
 
-    last_instance: 'PatchedMLRunnerConfigLoader' = None
+        last_instance: 'PatchedMLRunnerConfigLoader' = None
 
-    def __init__(self, config_files, **kwargs):
-        super().__init__(config_files=config_files, **kwargs)
-        self.__class__.last_instance = self
-        self.loaded = False
+        def __init__(self, config_files, **kwargs):
+            super().__init__(config_files=config_files, **kwargs)
+            self.__class__.last_instance = self
+            self.loaded = False
 
-    def load_config_files(self, on_load=None):
-        super().load_config_files(on_load)
-        self.loaded = True
+        def load_config_files(self, on_load=None):
+            super().load_config_files(on_load)
+            self.loaded = True
+
+    return PatchedMLRunnerConfigLoader
 
 
 class MLRunTestCase(unittest.TestCase):
 
-    @mock.patch('mltk.mlrunner.MLRunner', PatchedMLRunner)
-    @mock.patch('mltk.mlrunner.MLRunnerConfigLoader',
-                PatchedMLRunnerConfigLoader)
     def test_mlrun(self):
+        @config_params(undefined_fields=True)
+        class MyMLRunnerConfig(MLRunnerConfig):
+            pass
+
         with TemporaryDirectory() as temp_dir:
             config1 = os.path.join(temp_dir, 'config1.yml')
             config2 = os.path.join(temp_dir, 'config2.yml')
-            write_file_content(config1, b'')
-            write_file_content(config2, b'')
+            write_file_content(config1, b'key1: 123')
+            write_file_content(config2, b'key2: 456')
 
             runner = CliRunner()
 
             # test default arguments
-            result = runner.invoke(mlrun, [
-                '-s', 'http://127.0.0.1:8080', '--', 'echo', 'hello'])
+            result = runner.invoke(
+                mlrun,
+                ['-s', 'http://127.0.0.1:8080', '--print-config',
+                 '--', 'echo', 'hello']
+            )
             self.assertEqual(result.exit_code, 0)
-            config = PatchedMLRunner.last_instance.config
-            self.assertEqual(config, MLRunnerConfig(
-                server='http://127.0.0.1:8080',
-                args=['echo', 'hello'],
-                source=MLRunnerConfig.source(),
-                integration=MLRunnerConfig.integration()
-            ))
+            self.assertEqual(
+                result.output.rstrip(),
+                mltk.format_config(
+                    MLRunnerConfig(
+                        server='http://127.0.0.1:8080',
+                        args=['echo', 'hello'],
+                        source=MLRunnerConfig.source(),
+                        integration=MLRunnerConfig.integration()
+                    ),
+                    sort_keys=True
+                )
+            )
 
             # test various arguments
-            with set_environ_context(
-                    MLSTORAGE_SERVER_URI='http://127.0.0.1:8080'):
+            with set_environ_context(MLSTORAGE_SERVER_URI='http://127.0.0.1:8080'):
                 result = runner.invoke(mlrun, [
                     '-C', config1,
                     '--config-file=' + config2,
@@ -814,47 +830,42 @@ class MLRunTestCase(unittest.TestCase):
                     '--copy-source',
                     '--resume-from=xyzz',
                     '--clone-from=zyxx',
+                    '--print-config',
                 ])
                 self.assertEqual(result.exit_code, 0)
-                config = PatchedMLRunner.last_instance.config
-                self.assertEqual(config, MLRunnerConfig(
-                    server='http://127.0.0.1:8080',
-                    args='echo hello',
-                    env={'MY_ENV': 'abc', 'MY_ENV2': 'def'},
-                    gpu=[1, 2, 3],
-                    name='test',
-                    description='testing',
-                    tags=['first', 'second'],
-                    daemon=[
-                        'echo hello',
-                        'echo hi',
-                        'tensorboard --logdir=. --port=0 --host=0.0.0.0',
-                    ],
-                    source=MLRunnerConfig.source(
-                        copy_to_dst=True,
-                        make_archive=False,
-                    ),
-                    integration=MLRunnerConfig.integration(
-                        parse_stdout=True,
-                        watch_json_files=True,
-                    ),
-                    resume_from='xyzz',
-                    clone_from='zyxx',
-                ))
-                config_loader = PatchedMLRunnerConfigLoader.last_instance
-                self.assertEqual(config_loader._user_config_files,
-                                 (config1, config2))
-                self.assertTrue(config_loader.loaded)
+                self.assertEqual(
+                    result.output.rstrip(),
+                    mltk.format_config(
+                        MyMLRunnerConfig(
+                            server='http://127.0.0.1:8080',
+                            args='echo hello',
+                            env={'MY_ENV': 'abc', 'MY_ENV2': 'def'},
+                            gpu=[1, 2, 3],
+                            name='test',
+                            description='testing',
+                            tags=['first', 'second'],
+                            daemon=[
+                                'echo hello',
+                                'echo hi',
+                                'tensorboard --logdir=. --port=0 --host=0.0.0.0',
+                            ],
+                            source=MLRunnerConfig.source(
+                                copy_to_dst=True,
+                                make_archive=False,
+                            ),
+                            integration=MLRunnerConfig.integration(
+                                parse_stdout=True,
+                                watch_json_files=True,
+                            ),
+                            resume_from='xyzz',
+                            clone_from='zyxx',
+                            key1=123,
+                            key2=456,
+                        ),
+                        sort_keys=True
+                    )
+                )
 
-            # test None exit code
-            PatchedMLRunner.exit_code = None
-            result = runner.invoke(mlrun, [
-                '-s', 'http://127.0.0.1:8080', '--', 'echo', 'hello'])
-            self.assertEqual(result.exit_code, -1)
-
-    @mock.patch('mltk.mlrunner.MLRunner', PatchedMLRunner)
-    @mock.patch('mltk.mlrunner.MLRunnerConfigLoader',
-                PatchedMLRunnerConfigLoader)
     def test_legacy_args(self):
         with TemporaryDirectory() as temp_dir:
             runner = CliRunner()
@@ -863,20 +874,26 @@ class MLRunTestCase(unittest.TestCase):
             result = runner.invoke(mlrun, [
                 '-s', 'http://127.0.0.1:8080',
                 '--legacy',
+                '--print-config',
                 '--',
-                'echo', 'hello'
+                'echo', 'hello',
             ])
             self.assertEqual(result.exit_code, 0)
-            config = PatchedMLRunner.last_instance.config
-            self.assertEqual(config, MLRunnerConfig(
-                server='http://127.0.0.1:8080',
-                args=['echo', 'hello'],
-                source=MLRunnerConfig.source(),
-                integration=MLRunnerConfig.integration(
-                    parse_stdout=True,
-                    watch_json_files=True,
+            self.assertEqual(
+                result.output.rstrip(),
+                mltk.format_config(
+                    MLRunnerConfig(
+                        source=MLRunnerConfig.source(),
+                        integration=MLRunnerConfig.integration(
+                            parse_stdout=True,
+                            watch_json_files=True,
+                        ),
+                        server='http://127.0.0.1:8080',
+                        args=['echo', 'hello'],
+                    ),
+                    sort_keys=True,
                 )
-            ))
+            )
 
 
 class ProgramHostTestCase(unittest.TestCase):
@@ -1053,19 +1070,20 @@ class ProgramHostTestCase(unittest.TestCase):
                     '  sys.stdout.write(str(i) + "\\n")\n'
                     '  sys.stdout.flush()\n'
                     '  time.sleep(0.1)\n'
-                ]
+                ],
+                log_to_stdout=False,
             )
 
             with host.exec_proc() as proc:
                 time.sleep(0.5)
                 start_time = time.time()
-                host.kill(ctrl_c_timeout=0.5)
+                host.kill(ctrl_c_timeout=3)
                 stop_time = time.time()
 
             host.kill()
             _ = proc.wait()
             # self.assertNotEqual(code, 0)
-            self.assertLess(abs(stop_time - start_time), 0.1)  # that is, 20% difference of time
+            self.assertLess(abs(stop_time - start_time), 0.5)  # that is, 20% difference of time
 
             # test kill by SIGKILL
             log_file = os.path.join(temp_dir, 'console.log')

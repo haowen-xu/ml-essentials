@@ -1104,7 +1104,9 @@ def object_to_config(config_cls: Type[TConfig], obj: Any) -> TConfig:
 def format_config(config: Config,
                   title: Optional[str] = 'Configurations',
                   formatter: Callable[[Any], str] = str,
-                  delimiter_char: str = '=') -> str:
+                  delimiter_char: str = '=',
+                  sort_keys: bool = False
+                  ) -> str:
     """
     Format a config object into str.
 
@@ -1123,6 +1125,7 @@ def format_config(config: Config,
         title=title,
         formatter=formatter,
         delimiter_char=delimiter_char,
+        sort_keys=sort_keys,
     )
 
 

@@ -21,9 +21,8 @@ from urllib.parse import urlsplit, urlunsplit, SplitResult
 
 import click
 
-from .config import Config, ConfigLoader, field_checker, validate_config
+from .config import Config, ConfigLoader, field_checker, validate_config, format_config
 from .events import EventHost, Event
-from .formatting import format_key_values
 from .mlstorage import MLStorageClient, ExperimentDoc, normalize_relpath
 from .parsing import *
 from .typing_ import *
@@ -815,7 +814,7 @@ def mlrun(config_file, name, description, tags, env, gpu, work_dir, server,
 
     # if "--print-config", print the config and then exit
     if print_config:  # pragma: no cover
-        print(format_key_values(config, title='Configurations'))
+        print(format_config(config, sort_keys=True))
         sys.exit(0)
 
     # now create the runner and run

@@ -611,7 +611,7 @@ class LoggerCallback(Callback):
             self.ctx.progress.pop('eta', None)
 
     def on_metrics(self, data: CallbackData):
-        if not self._ctx_stack and self.remote_doc is not None:
+        if not data.stage.is_active and self.remote_doc is not None:
             # some immediate metrics outside a loop context
             m_logger = ScalarMetricsLogger()
             m_logger.update(data.metrics)

@@ -22,7 +22,9 @@ def format_key_values(key_values: Union[Dict,
                                         Iterable[Tuple[str, Any]]],
                       title: Optional[str] = None,
                       formatter: Callable[[Any], str] = pprint.pformat,
-                      delimiter_char: str = '=') -> str:
+                      delimiter_char: str = '=',
+                      sort_keys: bool = False
+                      ) -> str:
     """
     Format key value sequence into str.
 
@@ -63,6 +65,7 @@ def format_key_values(key_values: Union[Dict,
         formatter: The function to format values.
         delimiter_char: The character to use for the delimiter between title
             and config key values.
+        sort_keys: Whether to sort keys?
 
     Returns:
         The formatted str.
@@ -78,6 +81,9 @@ def format_key_values(key_values: Union[Dict,
         data = [(key, formatter(value)) for key, value in key_values.items()]
     else:
         data = [(key, formatter(value)) for key, value in key_values]
+
+    if sort_keys:
+        data.sort(key=lambda v: v[0])
 
     # use the terminaltables.AsciiTable to format our key values
     table = AsciiTable(data)
