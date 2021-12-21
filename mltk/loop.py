@@ -770,7 +770,8 @@ class TrainLoop(BaseLoop):
             fn: Callable[..., Optional[Dict[str, Any]]],
             data_generator: Iterable[ArrayTupleOrList],
             metrics: Union[Sequence[str], type(ALL)] = NOT_SET,
-            excludes: Sequence[str] = ()
+            excludes: Sequence[str] = (),
+            **kwargs
             ) -> Optional[Dict[str, Any]]:
         """
         Run the train loop.
@@ -788,19 +789,26 @@ class TrainLoop(BaseLoop):
             excludes: The names to exclude, of items produced by `fn`.
                 If a name is excluded, it will not be collected by any
                 :class:`BatchAggregator`.
+            \\**kwargs: Named parameters passed to `run_batches(...)` or
+                `run_epochs(...)`.
 
         Returns:
             If ``self.only_batch == True``, then the collected metrics will
             be returned.  Otherwise the return value will alwasy be :obj:`None`.
         """
         run_fn = self.run_batches if self.only_batch else self.run_epochs
+        F = lambda: run_fn(
+            fn,
+            data_generator,
+            metrics=metrics,
+            excludes=excludes,
+            **kwargs
+        )
         if not self._stage.is_active:
             with self:
-                return run_fn(
-                    fn, data_generator, metrics=metrics, excludes=excludes)
+                return F()
         else:
-            return run_fn(
-                fn, data_generator, metrics=metrics, excludes=excludes)
+            return F()
 
     def validation(self) -> 'ValidationLoop':
         """
